@@ -6,60 +6,58 @@ import type { GenerationStage } from '../components/GenerationProgress';
 import type { ProjectModels } from '../config/models';
 import { getModelById } from '../config/models';
 
-const PERSONA_PROMPT = (topic: string, language: string) => `
-Create three detailed personas for a podcast about "${topic}" in ${language}.
+const HOST_PERSONA_PROMPT = (topic: string, language: string) => `
+Create a detailed host persona for a podcast about "${topic}" in ${language}.
 
 Return ONLY a JSON object with the following structure (no additional text or formatting):
 
 {
-  "host": {
-    "name": "Full name",
-    "gender": "male" or "female",
-    "ageRange": "e.g., 30-40",
-    "personality": ["trait1", "trait2", "trait3"],
-    "background": "Professional background description",
-    "expertise": ["area1", "area2", "area3"],
-    "voiceCharacteristics": {
-      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
-      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
-      "pace": "slow" | "moderate" | "fast"
-    }
-  },
-  "guest1": {
-    "name": "Full name",
-    "gender": "male" or "female",
-    "ageRange": "e.g., 25-35",
-    "personality": ["trait1", "trait2", "trait3"],
-    "background": "Professional background description",
-    "expertise": ["area1", "area2", "area3"],
-    "voiceCharacteristics": {
-      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
-      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
-      "pace": "slow" | "moderate" | "fast"
-    }
-  },
-  "guest2": {
-    "name": "Full name",
-    "gender": "male" or "female",
-    "ageRange": "e.g., 40-50",
-    "personality": ["trait1", "trait2", "trait3"],
-    "background": "Professional background description",
-    "expertise": ["area1", "area2", "area3"],
-    "voiceCharacteristics": {
-      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
-      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
-      "pace": "slow" | "moderate" | "fast"
-    }
+  "name": "Full name",
+  "gender": "male" or "female",
+  "ageRange": "e.g., 35-45",
+  "personality": ["trait1", "trait2", "trait3"],
+  "background": "Professional background description",
+  "expertise": ["area1", "area2", "area3"],
+  "voiceCharacteristics": {
+    "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
+    "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
+    "pace": "slow" | "moderate" | "fast"
   }
 }
 
 Requirements:
-- Host: Should be an experienced journalist/broadcaster with balanced moderation style
-- Guest 1: Supporting perspective with specific expertise
-- Guest 2: Alternative perspective with different expertise
-- Each persona should have distinct voice characteristics that match their personality and background
-- Ensure gender diversity across the three personas
-- Voice characteristics should reflect their professional role and personality
+- Should be an experienced journalist/broadcaster with balanced moderation style
+- Expert in journalism with broad knowledge about various topics
+- Professional, balanced personality suitable for hosting discussions
+- Voice characteristics should reflect their role as a moderator and facilitator
+`;
+
+const GUEST_PERSONA_PROMPT = (topic: string, language: string, guestType: 'guest1' | 'guest2', perspective: 'supporting' | 'alternative') => `
+Create a detailed ${guestType} persona for a podcast about "${topic}" in ${language}.
+
+Return ONLY a JSON object with the following structure (no additional text or formatting):
+
+{
+  "name": "Full name",
+  "gender": "male" or "female", 
+  "ageRange": "e.g., 30-40",
+  "personality": ["trait1", "trait2", "trait3"],
+  "background": "Professional background description",
+  "expertise": ["area1", "area2", "area3"],
+  "voiceCharacteristics": {
+    "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
+    "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
+    "pace": "slow" | "moderate" | "fast"
+  }
+}
+
+Requirements:
+- This guest should provide a ${perspective} perspective on the topic
+- Should have specific expertise directly related to "${topic}"
+- Professional background that gives them authority to speak on this subject
+- Voice characteristics should match their personality and professional role
+- Should be different from the other participants (different gender, age range, or personality)
+- Must have distinct viewpoint and expertise that adds value to the discussion
 `;
 
 const SECTION_PROMPTS = {
@@ -138,12 +136,12 @@ Return ONLY a JSON array with the following format:
 `
 };
 
-async function generatePersonas(topic: string, language: string, apiKey: string, model: string): Promise<PersonaCollection> {
+async function generateHostPersona(topic: string, language: string, apiKey: string, model: string): Promise<PersonaCollection['host']> {
   const openai = createOpenAIClient(apiKey);
   const modelConfig = getModelById(model);
   
   const systemInstructions = "You are an expert in creating detailed, realistic personas for podcast participants. Return ONLY valid JSON with no additional text or formatting.";
-  const userPrompt = PERSONA_PROMPT(topic, language);
+  const userPrompt = HOST_PERSONA_PROMPT(topic, language);
   
   // Build the request parameters
   let baseParams: any;
@@ -190,24 +188,97 @@ async function generatePersonas(topic: string, language: string, apiKey: string,
 
   const content = completion.choices[0]?.message?.content;
   if (!content) {
-    throw new Error('Failed to generate personas');
+    throw new Error('Failed to generate host persona');
   }
 
   try {
     // Clean up potential markdown formatting
     const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const personas = JSON.parse(cleanContent) as PersonaCollection;
+    const persona = JSON.parse(cleanContent) as PersonaCollection['host'];
     
     // Validate the structure
-    if (!personas.host || !personas.guest1 || !personas.guest2) {
-      throw new Error('Invalid persona structure');
+    if (!persona.name || !persona.gender || !persona.ageRange || !persona.personality || !persona.background || !persona.expertise || !persona.voiceCharacteristics) {
+      throw new Error('Invalid host persona structure');
     }
 
-    return personas;
+    return persona;
   } catch (parseError) {
-    console.error('Error parsing personas JSON:', parseError);
+    console.error('Error parsing host persona JSON:', parseError);
     console.error('Raw content:', content);
-    throw new Error('Failed to parse personas JSON response');
+    throw new Error('Failed to parse host persona JSON response');
+  }
+}
+
+async function generateGuestPersona(topic: string, language: string, guestType: 'guest1' | 'guest2', perspective: 'supporting' | 'alternative', apiKey: string, model: string): Promise<PersonaCollection[keyof PersonaCollection]> {
+  const openai = createOpenAIClient(apiKey);
+  const modelConfig = getModelById(model);
+  
+  const systemInstructions = "You are an expert in creating detailed, realistic personas for podcast participants. Return ONLY valid JSON with no additional text or formatting.";
+  const userPrompt = GUEST_PERSONA_PROMPT(topic, language, guestType, perspective);
+  
+  // Build the request parameters
+  let baseParams: any;
+  
+  if (modelConfig?.noSystemRole) {
+    // For o1/o3 models that don't support system role, incorporate instructions into user message
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "user" as const,
+          content: `${systemInstructions}\n\n${userPrompt}`
+        }
+      ],
+    };
+  } else {
+    // For regular models that support system role
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "system" as const,
+          content: systemInstructions
+        },
+        {
+          role: "user" as const,
+          content: userPrompt
+        }
+      ],
+    };
+  }
+
+  // Add temperature only if model supports it
+  if (!modelConfig?.noTemperature) {
+    baseParams.temperature = 0.7;
+  }
+
+  // Use appropriate token parameter based on model type
+  const requestParams = modelConfig?.usesCompletionTokens 
+    ? { ...baseParams, max_completion_tokens: 2000 }
+    : { ...baseParams, max_tokens: 2000 };
+  
+  const completion = await openai.chat.completions.create(requestParams);
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error(`Failed to generate ${guestType} persona`);
+  }
+
+  try {
+    // Clean up potential markdown formatting
+    const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const persona = JSON.parse(cleanContent) as PersonaCollection[keyof PersonaCollection];
+    
+    // Validate the structure
+    if (!persona.name || !persona.gender || !persona.ageRange || !persona.personality || !persona.background || !persona.expertise || !persona.voiceCharacteristics) {
+      throw new Error(`Invalid ${guestType} persona structure`);
+    }
+
+    return persona;
+  } catch (parseError) {
+    console.error(`Error parsing ${guestType} persona JSON:`, parseError);
+    console.error('Raw content:', content);
+    throw new Error(`Failed to parse ${guestType} persona JSON response`);
   }
 }
 
@@ -334,7 +405,15 @@ export async function generatePodcastScript(
     const language = await detectLanguage(topic, apiKey, models.languageDetection);
     
     setGenerationStage('creating-personas');
-    const personas = await generatePersonas(topic, language, apiKey, models.personaGeneration);
+    const hostPersona = await generateHostPersona(topic, language, apiKey, models.personaGeneration);
+    const guest1Persona = await generateGuestPersona(topic, language, 'guest1', 'supporting', apiKey, models.personaGeneration);
+    const guest2Persona = await generateGuestPersona(topic, language, 'guest2', 'alternative', apiKey, models.personaGeneration);
+
+    const personas: PersonaCollection = {
+      host: hostPersona,
+      guest1: guest1Persona,
+      guest2: guest2Persona,
+    };
     const personaGenders = parsePersonaGenders(personas);
 
     setGenerationStage('writing-script');
