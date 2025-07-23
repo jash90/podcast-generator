@@ -1,36 +1,65 @@
 import OpenAI from 'openai';
 import { createOpenAIClient } from '../config/api';
-import type { PodcastScript, PodcastSegment } from '../types';
+import type { PodcastScript, PodcastSegment, PersonaCollection } from '../types';
 import { detectLanguage } from './languageDetector';
 import type { GenerationStage } from '../components/GenerationProgress';
 import type { ProjectModels } from '../config/models';
 import { getModelById } from '../config/models';
 
 const PERSONA_PROMPT = (topic: string, language: string) => `
-Create three detailed personas for a podcast about "${topic}" in ${language}:
+Create three detailed personas for a podcast about "${topic}" in ${language}.
 
-1. Host:
-- Full name and background
-- Gender (male/female)
-- Expertise in journalism/broadcasting
-- Knowledge about the topic's history
-- Known for their balanced moderation style
+Return ONLY a JSON object with the following structure (no additional text or formatting):
 
-2. Guest 1 (Supporting perspective):
-- Full name and professional background
-- Gender (male/female)
-- Specific expertise related to the topic
-- Notable achievements
-- Main arguments and viewpoints
+{
+  "host": {
+    "name": "Full name",
+    "gender": "male" or "female",
+    "ageRange": "e.g., 30-40",
+    "personality": ["trait1", "trait2", "trait3"],
+    "background": "Professional background description",
+    "expertise": ["area1", "area2", "area3"],
+    "voiceCharacteristics": {
+      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
+      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
+      "pace": "slow" | "moderate" | "fast"
+    }
+  },
+  "guest1": {
+    "name": "Full name",
+    "gender": "male" or "female",
+    "ageRange": "e.g., 25-35",
+    "personality": ["trait1", "trait2", "trait3"],
+    "background": "Professional background description",
+    "expertise": ["area1", "area2", "area3"],
+    "voiceCharacteristics": {
+      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
+      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
+      "pace": "slow" | "moderate" | "fast"
+    }
+  },
+  "guest2": {
+    "name": "Full name",
+    "gender": "male" or "female",
+    "ageRange": "e.g., 40-50",
+    "personality": ["trait1", "trait2", "trait3"],
+    "background": "Professional background description",
+    "expertise": ["area1", "area2", "area3"],
+    "voiceCharacteristics": {
+      "tone": "warm" | "authoritative" | "friendly" | "professional" | "energetic" | "calm",
+      "style": "conversational" | "formal" | "casual" | "academic" | "journalistic",
+      "pace": "slow" | "moderate" | "fast"
+    }
+  }
+}
 
-3. Guest 2 (Alternative perspective):
-- Full name and professional background
-- Gender (male/female)
-- Specific expertise related to the topic
-- Notable achievements
-- Main arguments and viewpoints
-
-Format: Return the personas in a clear structure with "Host:", "Guest 1:", and "Guest 2:" sections. Make sure to clearly specify the gender for each persona.
+Requirements:
+- Host: Should be an experienced journalist/broadcaster with balanced moderation style
+- Guest 1: Supporting perspective with specific expertise
+- Guest 2: Alternative perspective with different expertise
+- Each persona should have distinct voice characteristics that match their personality and background
+- Ensure gender diversity across the three personas
+- Voice characteristics should reflect their professional role and personality
 `;
 
 const SECTION_PROMPTS = {
@@ -109,11 +138,11 @@ Return ONLY a JSON array with the following format:
 `
 };
 
-async function generatePersonas(topic: string, language: string, apiKey: string, model: string) {
+async function generatePersonas(topic: string, language: string, apiKey: string, model: string): Promise<PersonaCollection> {
   const openai = createOpenAIClient(apiKey);
   const modelConfig = getModelById(model);
   
-  const systemInstructions = "You are an expert in creating detailed, realistic personas for podcast participants.";
+  const systemInstructions = "You are an expert in creating detailed, realistic personas for podcast participants. Return ONLY valid JSON with no additional text or formatting.";
   const userPrompt = PERSONA_PROMPT(topic, language);
   
   // Build the request parameters
@@ -154,55 +183,66 @@ async function generatePersonas(topic: string, language: string, apiKey: string,
 
   // Use appropriate token parameter based on model type
   const requestParams = modelConfig?.usesCompletionTokens 
-    ? { ...baseParams, max_completion_tokens: 1000 }
-    : { ...baseParams, max_tokens: 1000 };
+    ? { ...baseParams, max_completion_tokens: 2000 }
+    : { ...baseParams, max_tokens: 2000 };
   
   const completion = await openai.chat.completions.create(requestParams);
 
-  return completion.choices[0]?.message?.content || '';
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('Failed to generate personas');
+  }
+
+  try {
+    // Clean up potential markdown formatting
+    const cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const personas = JSON.parse(cleanContent) as PersonaCollection;
+    
+    // Validate the structure
+    if (!personas.host || !personas.guest1 || !personas.guest2) {
+      throw new Error('Invalid persona structure');
+    }
+
+    return personas;
+  } catch (parseError) {
+    console.error('Error parsing personas JSON:', parseError);
+    console.error('Raw content:', content);
+    throw new Error('Failed to parse personas JSON response');
+  }
 }
 
-function parsePersonaGenders(personas: string): Record<string, boolean> {
-  const genderMap: Record<string, boolean> = {
-    'host': true, // default to male
-    'guest1': true, // default to male  
-    'guest2': false, // default to female
+function parsePersonaGenders(personas: PersonaCollection): Record<string, boolean> {
+  return {
+    'host': personas.host.gender === 'male',
+    'guest1': personas.guest1.gender === 'male',
+    'guest2': personas.guest2.gender === 'male',
   };
+}
 
-  // Parse the personas text to extract gender information
-  const sections = personas.split(/(?:Host:|Guest 1:|Guest 2:)/i);
-  
-  // Process Host section
-  if (sections[1]) {
-    const hostSection = sections[1].toLowerCase();
-    if (hostSection.includes('gender') && hostSection.includes('female')) {
-      genderMap['host'] = false; // female
-    } else if (hostSection.includes('gender') && hostSection.includes('male')) {
-      genderMap['host'] = true; // male
-    }
-  }
-  
-  // Process Guest 1 section
-  if (sections[2]) {
-    const guest1Section = sections[2].toLowerCase();
-    if (guest1Section.includes('gender') && guest1Section.includes('female')) {
-      genderMap['guest1'] = false; // female
-    } else if (guest1Section.includes('gender') && guest1Section.includes('male')) {
-      genderMap['guest1'] = true; // male
-    }
-  }
-  
-  // Process Guest 2 section
-  if (sections[3]) {
-    const guest2Section = sections[3].toLowerCase();
-    if (guest2Section.includes('gender') && guest2Section.includes('female')) {
-      genderMap['guest2'] = false; // female
-    } else if (guest2Section.includes('gender') && guest2Section.includes('male')) {
-      genderMap['guest2'] = true; // male
-    }
-  }
+// Convert personas to text format for section generation (temporary)
+function personasToText(personas: PersonaCollection): string {
+  return `
+Host: ${personas.host.name}
+- Gender: ${personas.host.gender}
+- Background: ${personas.host.background}
+- Expertise: ${personas.host.expertise.join(', ')}
+- Personality: ${personas.host.personality.join(', ')}
+- Voice: ${personas.host.voiceCharacteristics.tone}, ${personas.host.voiceCharacteristics.style}, ${personas.host.voiceCharacteristics.pace} pace
 
-  return genderMap;
+Guest 1: ${personas.guest1.name}
+- Gender: ${personas.guest1.gender}
+- Background: ${personas.guest1.background}
+- Expertise: ${personas.guest1.expertise.join(', ')}
+- Personality: ${personas.guest1.personality.join(', ')}
+- Voice: ${personas.guest1.voiceCharacteristics.tone}, ${personas.guest1.voiceCharacteristics.style}, ${personas.guest1.voiceCharacteristics.pace} pace
+
+Guest 2: ${personas.guest2.name}
+- Gender: ${personas.guest2.gender}
+- Background: ${personas.guest2.background}
+- Expertise: ${personas.guest2.expertise.join(', ')}
+- Personality: ${personas.guest2.personality.join(', ')}
+- Voice: ${personas.guest2.voiceCharacteristics.tone}, ${personas.guest2.voiceCharacteristics.style}, ${personas.guest2.voiceCharacteristics.pace} pace
+`.trim();
 }
 
 async function generateSection(
@@ -299,16 +339,21 @@ export async function generatePodcastScript(
 
     setGenerationStage('writing-script');
     const sections = await Promise.all([
-      generateSection('opening', topic, language, personas, apiKey, models.scriptGeneration),
-      generateSection('background', topic, language, personas, apiKey, models.scriptGeneration),
-      generateSection('discussion', topic, language, personas, apiKey, models.scriptGeneration),
-      generateSection('conclusion', topic, language, personas, apiKey, models.scriptGeneration)
+      generateSection('opening', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
+      generateSection('background', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
+      generateSection('discussion', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
+      generateSection('conclusion', topic, language, personasToText(personas), apiKey, models.scriptGeneration)
     ]);
 
     const segments = sections.flat();
 
     setGenerationStage('initializing-voices');
-    return { segments, language, personaGenders };
+    return { 
+      segments, 
+      language, 
+      personaGenders,
+      personas
+    };
   } catch (error: any) {
     if (error.response?.status === 401) {
       throw new Error('Invalid API key. Please check your OpenAI API key and try again.');

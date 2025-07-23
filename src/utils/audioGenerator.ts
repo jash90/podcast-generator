@@ -1,31 +1,189 @@
 import OpenAI from 'openai';
 import { createOpenAIClient } from '../config/api';
-import type { PodcastScript, PodcastSegment } from '../types';
+import type { PodcastScript, PodcastSegment, PersonaCollection, PersonaDetail } from '../types';
 import { splitTextForTTS, optimizeTextForTTS, validateTextChunk } from './textSplitter';
 
-const VOICES = {
-  male: ['echo', 'onyx', 'fable'],
-  female: ['alloy', 'nova', 'shimmer']
+// Enhanced voice configuration with characteristics
+const VOICE_PROFILES = {
+  echo: {
+    gender: 'male' as const,
+    characteristics: {
+      tone: ['authoritative', 'professional', 'calm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['formal', 'academic', 'journalistic'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['30-40', '40-50'],
+      personality: ['analytical', 'serious', 'knowledgeable']
+    }
+  },
+  onyx: {
+    gender: 'male' as const,
+    characteristics: {
+      tone: ['warm', 'friendly', 'calm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['conversational', 'casual'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['25-35', '30-40'],
+      personality: ['approachable', 'enthusiastic', 'engaging']
+    }
+  },
+  fable: {
+    gender: 'male' as const,
+    characteristics: {
+      tone: ['energetic', 'professional'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['journalistic', 'conversational'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['25-35', '30-40'],
+      personality: ['dynamic', 'confident', 'articulate']
+    }
+  },
+  alloy: {
+    gender: 'female' as const,
+    characteristics: {
+      tone: ['professional', 'authoritative', 'calm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['formal', 'academic', 'journalistic'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['30-40', '35-45'],
+      personality: ['intelligent', 'composed', 'trustworthy']
+    }
+  },
+  nova: {
+    gender: 'female' as const,
+    characteristics: {
+      tone: ['warm', 'friendly', 'energetic'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['conversational', 'casual'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['25-35', '30-40'],
+      personality: ['vibrant', 'passionate', 'expressive']
+    }
+  },
+  shimmer: {
+    gender: 'female' as const,
+    characteristics: {
+      tone: ['calm', 'professional', 'warm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['conversational', 'formal'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      ageRange: ['35-45', '40-50'],
+      personality: ['thoughtful', 'mature', 'balanced']
+    }
+  }
 } as const;
 
-type VoiceType = typeof VOICES.male[number] | typeof VOICES.female[number];
+type VoiceType = keyof typeof VOICE_PROFILES;
 
 const voiceAssignments = new Map<string, VoiceType>();
 const audioCache = new Map<string, ArrayBuffer>();
 
-function assignVoiceForPersona(type: string, personas: Record<string, boolean>): VoiceType {
+/**
+ * Calculate compatibility score between a persona and voice profile
+ */
+function calculateVoiceCompatibility(persona: PersonaDetail, voiceProfile: typeof VOICE_PROFILES[VoiceType]): number {
+  let score = 0;
+  
+  // Gender match is essential
+  if (persona.gender !== voiceProfile.gender) {
+    return 0;
+  }
+  
+  // Tone compatibility (40% weight)
+  if (voiceProfile.characteristics.tone.includes(persona.voiceCharacteristics.tone)) {
+    score += 40;
+  }
+  
+  // Style compatibility (30% weight)
+  if (voiceProfile.characteristics.style.includes(persona.voiceCharacteristics.style)) {
+    score += 30;
+  }
+  
+  // Age range compatibility (20% weight)
+  const ageRangeMatch = voiceProfile.characteristics.ageRange.some(range => 
+    range === persona.ageRange || persona.ageRange === range
+  );
+  if (ageRangeMatch) {
+    score += 20;
+  }
+  
+  // Personality match (10% weight)
+  const personalityMatch = persona.personality.some(trait => 
+    voiceProfile.characteristics.personality.some(voiceTrait => 
+      trait.toLowerCase().includes(voiceTrait.toLowerCase()) ||
+      voiceTrait.toLowerCase().includes(trait.toLowerCase())
+    )
+  );
+  if (personalityMatch) {
+    score += 10;
+  }
+  
+  return score;
+}
+
+/**
+ * Assign the best matching voice for a persona using detailed characteristics
+ */
+function assignVoiceForPersona(type: string, personas: PersonaCollection | Record<string, boolean>): VoiceType {
   if (voiceAssignments.has(type)) {
     return voiceAssignments.get(type)!;
   }
 
-  const isMale = personas[type];
-  const availableVoices = isMale ? VOICES.male : VOICES.female;
-  const usedVoices = Array.from(voiceAssignments.values());
-  const unusedVoice = availableVoices.find(voice => !usedVoices.includes(voice));
-  const assignedVoice = unusedVoice || availableVoices[usedVoices.length % availableVoices.length];
+  // Fallback to gender-based assignment for backward compatibility
+  if (!('host' in personas) || typeof personas.host === 'boolean') {
+    const genderMap = personas as Record<string, boolean>;
+    const isMale = genderMap[type];
+    const availableVoices = isMale 
+      ? (['echo', 'onyx', 'fable'] as const)
+      : (['alloy', 'nova', 'shimmer'] as const);
+    const usedVoices = Array.from(voiceAssignments.values());
+    const unusedVoice = availableVoices.find(voice => !usedVoices.includes(voice));
+    const assignedVoice = unusedVoice || availableVoices[usedVoices.length % availableVoices.length];
+    
+    voiceAssignments.set(type, assignedVoice);
+    return assignedVoice;
+  }
+
+  // Use detailed persona matching
+  const personaCollection = personas as PersonaCollection;
+  const persona = personaCollection[type as keyof PersonaCollection];
   
-  voiceAssignments.set(type, assignedVoice);
-  return assignedVoice;
+  if (!persona) {
+    console.warn(`No persona found for type: ${type}, using default voice`);
+    voiceAssignments.set(type, 'onyx');
+    return 'onyx';
+  }
+
+  // Calculate compatibility scores for all voices
+  const voiceScores = Object.entries(VOICE_PROFILES).map(([voiceName, profile]) => ({
+    voice: voiceName as VoiceType,
+    score: calculateVoiceCompatibility(persona, profile)
+  }));
+
+  // Filter out voices that don't match gender
+  const compatibleVoices = voiceScores.filter(v => v.score > 0);
+  
+  if (compatibleVoices.length === 0) {
+    console.warn(`No compatible voices found for ${type}, using gender fallback`);
+    const fallbackVoices = persona.gender === 'male' 
+      ? (['echo', 'onyx', 'fable'] as const)
+      : (['alloy', 'nova', 'shimmer'] as const);
+    const assignedVoice = fallbackVoices[0];
+    voiceAssignments.set(type, assignedVoice);
+    return assignedVoice;
+  }
+
+  // Sort by score and prefer unused voices
+  const usedVoices = Array.from(voiceAssignments.values());
+  compatibleVoices.sort((a, b) => {
+    // Prioritize unused voices
+    const aUsed = usedVoices.includes(a.voice);
+    const bUsed = usedVoices.includes(b.voice);
+    
+    if (aUsed !== bUsed) {
+      return aUsed ? 1 : -1;
+    }
+    
+    // Then sort by compatibility score
+    return b.score - a.score;
+  });
+
+  const bestVoice = compatibleVoices[0].voice;
+  voiceAssignments.set(type, bestVoice);
+  
+  console.log(`Assigned voice "${bestVoice}" to ${type} (${persona.name}) with score ${compatibleVoices[0].score}`);
+  console.log(`Voice characteristics: ${JSON.stringify(VOICE_PROFILES[bestVoice].characteristics)}`);
+  console.log(`Persona characteristics: tone=${persona.voiceCharacteristics.tone}, style=${persona.voiceCharacteristics.style}, age=${persona.ageRange}`);
+  
+  return bestVoice;
 }
 
 function getCacheKey(segment: PodcastSegment, model: string): string {
@@ -145,8 +303,8 @@ export async function generateAudioForSegment(
 export async function initializeVoiceAssignments(script: PodcastScript): Promise<void> {
   voiceAssignments.clear();
   
-  // Use the gender information from the script, with fallback to defaults
-  const personaGenders = script.personaGenders || {
+  // Use detailed personas if available, otherwise fall back to gender map
+  const personas = script.personas || script.personaGenders || {
     'host': true,
     'guest1': true,        
     'guest2': false,
@@ -154,7 +312,18 @@ export async function initializeVoiceAssignments(script: PodcastScript): Promise
 
   const uniqueTypes = new Set(script.segments.map(s => s.type));
   uniqueTypes.forEach(type => {
-    assignVoiceForPersona(type, personaGenders);
+    assignVoiceForPersona(type, personas);
+  });
+  
+  // Log voice assignments for debugging
+  console.log('Voice assignments initialized:');
+  Array.from(voiceAssignments.entries()).forEach(([type, voice]) => {
+    if (script.personas && script.personas[type as keyof PersonaCollection]) {
+      const persona = script.personas[type as keyof PersonaCollection];
+      console.log(`  ${type} (${persona.name}): ${voice}`);
+    } else {
+      console.log(`  ${type}: ${voice}`);
+    }
   });
 }
 
@@ -249,7 +418,19 @@ export function debugDownload(script: PodcastScript): void {
   console.log(`Script segments: ${script.segments?.length || 0}`);
   console.log(`Voice assignments: ${voiceAssignments.size}`);
   console.log(`Cache entries: ${audioCache.size}`);
-  console.log(`Persona genders:`, script.personaGenders);
+  
+  // Show detailed persona information if available
+  if (script.personas) {
+    console.log('Detailed personas:');
+    Object.entries(script.personas).forEach(([type, persona]) => {
+      console.log(`  ${type}: ${persona.name} (${persona.gender}, ${persona.ageRange})`);
+      console.log(`    Voice chars: ${persona.voiceCharacteristics.tone}, ${persona.voiceCharacteristics.style}, ${persona.voiceCharacteristics.pace}`);
+      console.log(`    Background: ${persona.background}`);
+      console.log(`    Expertise: ${persona.expertise.join(', ')}`);
+    });
+  } else {
+    console.log(`Persona genders:`, script.personaGenders);
+  }
   
   if (script.segments) {
     script.segments.forEach((segment, index) => {
@@ -259,6 +440,18 @@ export function debugDownload(script: PodcastScript): void {
   
   console.log('Cache stats:', getCacheStats());
   console.log('Voice assignments:', Array.from(voiceAssignments.entries()));
+  
+  // Show voice profile matches if detailed personas available
+  if (script.personas) {
+    console.log('Voice compatibility scores:');
+    Object.entries(script.personas).forEach(([type, persona]) => {
+      const assignedVoice = voiceAssignments.get(type);
+      if (assignedVoice) {
+        const score = calculateVoiceCompatibility(persona, VOICE_PROFILES[assignedVoice]);
+        console.log(`  ${type} (${persona.name}) -> ${assignedVoice}: ${score}% compatibility`);
+      }
+    });
+  }
 }
 
 /**
