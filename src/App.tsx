@@ -10,6 +10,9 @@ import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
 import { DEFAULT_MODELS, fetchModelsFromAPI, updateModels } from './config/models';
 import type { ProjectModels } from './config/models';
+import { getStorageItem, setStorageItem, removeStorageItem } from './utils/storage';
+
+const API_KEY_STORAGE_KEY = 'podcast-generator-api-key';
 
 function App() {
   const [apiKey, setApiKey] = useState('');
@@ -23,6 +26,23 @@ function App() {
   const [isModelSelectorExpanded, setIsModelSelectorExpanded] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+
+  // Load API key from localStorage on mount
+  useEffect(() => {
+    const savedApiKey = getStorageItem(API_KEY_STORAGE_KEY);
+    if (savedApiKey) {
+      setApiKey(savedApiKey);
+    }
+  }, []);
+
+  // Save API key to localStorage when it changes
+  useEffect(() => {
+    if (apiKey.trim()) {
+      setStorageItem(API_KEY_STORAGE_KEY, apiKey);
+    } else {
+      removeStorageItem(API_KEY_STORAGE_KEY);
+    }
+  }, [apiKey]);
 
   // Fetch models when API key changes
   useEffect(() => {
@@ -67,6 +87,15 @@ function App() {
     return () => clearTimeout(timeoutId);
   }, [apiKey]);
 
+  const handleApiKeyChange = (newApiKey: string) => {
+    setApiKey(newApiKey);
+  };
+
+  const handleClearApiKey = () => {
+    setApiKey('');
+    removeStorageItem(API_KEY_STORAGE_KEY);
+  };
+
   const handleGenerate = async () => {
     if (!apiKey.trim() || !topic.trim()) {
       setError('Please provide both an API key and a topic.');
@@ -106,7 +135,8 @@ function App() {
           <div className="bg-purple-800/30 p-6 rounded-xl border border-purple-700/50">
             <ApiKeyInput 
               apiKey={apiKey} 
-              onChange={setApiKey}
+              onChange={handleApiKeyChange}
+              onClear={handleClearApiKey}
               error={error || undefined}
             />
             
