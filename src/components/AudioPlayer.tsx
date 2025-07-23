@@ -25,7 +25,6 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [audioSegments, setAudioSegments] = useState<AudioSegmentState[]>([]);
@@ -209,7 +208,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
       // Create new source
       sourceRef.current = audioContextRef.current.createBufferSource();
       sourceRef.current.buffer = audioBuffer;
-      sourceRef.current.playbackRate.value = playbackRate;
+      sourceRef.current.playbackRate.value = 1; // Fixed playback rate
 
       // Create gain node for volume control
       if (!gainNodeRef.current) {
@@ -245,7 +244,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
       setError('Failed to play audio. Please check your API key and try again.');
       setIsPlaying(false);
     }
-  }, [script, audioSegments, apiKey, ttsModel, playbackRate, volume]);
+  }, [script, audioSegments, apiKey, ttsModel, volume]);
 
   // Handle play/pause
   useEffect(() => {
@@ -271,13 +270,6 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
       gainNodeRef.current.gain.value = volume;
     }
   }, [volume]);
-
-  // Update playback rate
-  useEffect(() => {
-    if (sourceRef.current) {
-      sourceRef.current.playbackRate.value = playbackRate;
-    }
-  }, [playbackRate]);
 
   const handleDownload = async () => {
     if (!script) return;
@@ -507,23 +499,6 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
             className="w-20 h-2 bg-purple-700 rounded-lg appearance-none cursor-pointer"
           />
           <span className="text-xs text-purple-400 w-8">{Math.round(volume * 100)}%</span>
-        </div>
-
-        {/* Playback Speed */}
-        <div className="flex items-center space-x-2">
-          <span className="text-xs text-purple-300">Speed:</span>
-          <select
-            value={playbackRate}
-            onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
-            className="bg-purple-700/50 border border-purple-600/50 text-purple-100 rounded px-2 py-1 text-xs"
-          >
-            <option value="0.5">0.5x</option>
-            <option value="0.75">0.75x</option>
-            <option value="1">1x</option>
-            <option value="1.25">1.25x</option>
-            <option value="1.5">1.5x</option>
-            <option value="2">2x</option>
-          </select>
         </div>
 
         {/* Download Button */}
