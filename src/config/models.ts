@@ -25,9 +25,9 @@ const MODEL_RULES = {
   // o1/o3 reasoning models have special limitations
   isReasoningModel: (id: string) => id.startsWith('o1') || id.startsWith('o3'),
   // TTS models
-  isTTSModel: (id: string) => id.startsWith('tts-'),
+  isTTSModel: (id: string) => id.startsWith('tts-') || id === 'gpt-4o-mini-tts',
   // Chat models
-  isChatModel: (id: string) => !id.startsWith('tts-') && !id.startsWith('whisper-') && !id.startsWith('dall-e') && !id.startsWith('text-embedding'),
+  isChatModel: (id: string) => !id.startsWith('tts-') && !id.startsWith('whisper-') && !id.startsWith('dall-e') && !id.startsWith('text-embedding') && id !== 'gpt-4o-mini-tts',
 };
 
 // Apply model configuration rules
@@ -56,7 +56,7 @@ function applyModelRules(model: { id: string; [key: string]: unknown }): ModelCo
       name: formatModelName(id),
       provider: 'openai',
       category: 'tts',
-      description: id.includes('-hd') ? 'Higher quality text-to-speech model' : 'Standard text-to-speech model',
+      description: generateTTSModelDescription(id),
     };
   }
   
@@ -78,6 +78,7 @@ function formatModelName(id: string): string {
     'gpt-3.5-turbo': 'GPT-3.5 Turbo',
     'tts-1': 'TTS-1',
     'tts-1-hd': 'TTS-1 HD',
+    'gpt-4o-mini-tts': 'GPT-4o Mini TTS',
   };
   
   return nameMap[id] || id.split('-').map(part => 
@@ -87,25 +88,18 @@ function formatModelName(id: string): string {
 
 function generateModelDescription(id: string): string {
   if (id.startsWith('o3')) {
-    return id.includes('mini') 
-      ? 'Latest reasoning model, optimized for efficiency'
-      : 'Latest reasoning model with exceptional problem-solving capabilities';
+    return 'Latest reasoning model with exceptional problem-solving capabilities';
   }
   
   if (id.startsWith('o1')) {
-    if (id.includes('preview')) return 'Preview version of o1 reasoning model';
-    if (id.includes('mini')) return 'Faster and more affordable o1 reasoning model';
     return 'Advanced reasoning model for complex problems';
   }
   
+  if (id === 'gpt-4.1') {
+    return 'Enhanced GPT-4 with improved capabilities and performance';
+  }
+  
   if (id.startsWith('gpt-4')) {
-    if (id.includes('turbo')) return 'Latest GPT-4 with improved performance and larger context';
-    if (id.includes('o')) {
-      return id.includes('mini') 
-        ? 'Faster and more affordable version of GPT-4o'
-        : 'GPT-4 optimized for speed and efficiency';
-    }
-    if (id === 'gpt-4.1') return 'Enhanced GPT-4 with improved capabilities and performance';
     return 'Most capable model, best for complex reasoning';
   }
   
@@ -114,6 +108,16 @@ function generateModelDescription(id: string): string {
   }
   
   return 'OpenAI language model';
+}
+
+function generateTTSModelDescription(id: string): string {
+  if (id === 'gpt-4o-mini-tts') {
+    return 'Advanced text-to-speech model with improved voice quality';
+  }
+  if (id.includes('-hd')) {
+    return 'Higher quality text-to-speech model';
+  }
+  return 'Standard text-to-speech model';
 }
 
 function getModelMaxTokens(id: string): number {
@@ -255,6 +259,13 @@ const FALLBACK_TTS_MODELS: ModelConfig[] = [
     provider: 'openai',
     category: 'tts',
     description: 'Higher quality text-to-speech model'
+  },
+  {
+    id: 'gpt-4o-mini-tts',
+    name: 'GPT-4o Mini TTS',
+    provider: 'openai',
+    category: 'tts',
+    description: 'Advanced text-to-speech model with improved voice quality'
   }
 ];
 
