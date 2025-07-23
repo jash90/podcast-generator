@@ -27,15 +27,16 @@ function assignVoiceForPersona(type: string, personas: Record<string, boolean>):
   return assignedVoice;
 }
 
-function getCacheKey(segment: PodcastSegment): string {
-  return `${segment.type}-${segment.text}`;
+function getCacheKey(segment: PodcastSegment, model: string): string {
+  return `${segment.type}-${segment.text}-${model}`;
 }
 
 export async function generateAudioForSegment(
   segment: PodcastSegment,
-  apiKey: string
+  apiKey: string,
+  model: string = 'tts-1'
 ): Promise<ArrayBuffer> {
-  const cacheKey = getCacheKey(segment);
+  const cacheKey = getCacheKey(segment, model);
   
   if (audioCache.has(cacheKey)) {
     const cachedData = audioCache.get(cacheKey)!;
@@ -46,7 +47,7 @@ export async function generateAudioForSegment(
   const voice: VoiceType = voiceAssignments.get(segment.type) || 'onyx';
   
   const response = await openai.audio.speech.create({
-    model: "tts-1",
+    model,
     voice,
     input: segment.text,
   });
@@ -74,7 +75,7 @@ export async function initializeVoiceAssignments(script: PodcastScript): Promise
   });
 }
 
-export async function downloadFullPodcast(script: PodcastScript, apiKey: string): Promise<void> {
+export async function downloadFullPodcast(script: PodcastScript, apiKey: string, model: string = 'tts-1'): Promise<void> {
   if (voiceAssignments.size === 0) {
     await initializeVoiceAssignments(script);
   }
@@ -82,7 +83,7 @@ export async function downloadFullPodcast(script: PodcastScript, apiKey: string)
   const audioBuffers: ArrayBuffer[] = [];
   
   for (const segment of script.segments) {
-    const buffer = await generateAudioForSegment(segment, apiKey);
+    const buffer = await generateAudioForSegment(segment, apiKey, model);
     audioBuffers.push(buffer);
   }
 

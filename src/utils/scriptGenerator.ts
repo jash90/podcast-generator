@@ -3,6 +3,8 @@ import { createOpenAIClient } from '../config/api';
 import type { PodcastScript, PodcastSegment } from '../types';
 import { detectLanguage } from './languageDetector';
 import type { GenerationStage } from '../components/GenerationProgress';
+import type { ProjectModels } from '../config/models';
+import { getModelById } from '../config/models';
 
 const PERSONA_PROMPT = (topic: string, language: string) => `
 Create three detailed personas for a podcast about "${topic}" in ${language}:
@@ -107,24 +109,55 @@ Return ONLY a JSON array with the following format:
 `
 };
 
-async function generatePersonas(topic: string, language: string, apiKey: string) {
+async function generatePersonas(topic: string, language: string, apiKey: string, model: string) {
   const openai = createOpenAIClient(apiKey);
+  const modelConfig = getModelById(model);
   
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: "You are an expert in creating detailed, realistic personas for podcast participants."
-      },
-      {
-        role: "user",
-        content: PERSONA_PROMPT(topic, language)
-      }
-    ],
-    temperature: 0.7,
-    max_tokens: 1000,
-  });
+  const systemInstructions = "You are an expert in creating detailed, realistic personas for podcast participants.";
+  const userPrompt = PERSONA_PROMPT(topic, language);
+  
+  // Build the request parameters
+  let baseParams: any;
+  
+  if (modelConfig?.noSystemRole) {
+    // For o1/o3 models that don't support system role, incorporate instructions into user message
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "user" as const,
+          content: `${systemInstructions}\n\n${userPrompt}`
+        }
+      ],
+    };
+  } else {
+    // For regular models that support system role
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "system" as const,
+          content: systemInstructions
+        },
+        {
+          role: "user" as const,
+          content: userPrompt
+        }
+      ],
+    };
+  }
+
+  // Add temperature only if model supports it
+  if (!modelConfig?.noTemperature) {
+    baseParams.temperature = 0.7;
+  }
+
+  // Use appropriate token parameter based on model type
+  const requestParams = modelConfig?.usesCompletionTokens 
+    ? { ...baseParams, max_completion_tokens: 1000 }
+    : { ...baseParams, max_tokens: 1000 };
+  
+  const completion = await openai.chat.completions.create(requestParams);
 
   return completion.choices[0]?.message?.content || '';
 }
@@ -177,25 +210,57 @@ async function generateSection(
   topic: string,
   language: string,
   personas: string,
-  apiKey: string
+  apiKey: string,
+  model: string
 ): Promise<PodcastSegment[]> {
   const openai = createOpenAIClient(apiKey);
+  const modelConfig = getModelById(model);
   
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: `You are an expert podcast script writer who creates engaging, natural-flowing discussions in ${language}. Return ONLY the JSON array as specified, with no additional text or formatting.`
-      },
-      {
-        role: "user",
-        content: SECTION_PROMPTS[section](topic, language, personas)
-      }
-    ],
-    temperature: 0.7,
-    max_tokens: 16000,
-  });
+  const systemInstructions = `You are an expert podcast script writer who creates engaging, natural-flowing discussions in ${language}. Return ONLY the JSON array as specified, with no additional text or formatting.`;
+  const userPrompt = SECTION_PROMPTS[section](topic, language, personas);
+  
+  // Build the request parameters
+  let baseParams: any;
+  
+  if (modelConfig?.noSystemRole) {
+    // For o1/o3 models that don't support system role, incorporate instructions into user message
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "user" as const,
+          content: `${systemInstructions}\n\n${userPrompt}`
+        }
+      ],
+    };
+  } else {
+    // For regular models that support system role
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "system" as const,
+          content: systemInstructions
+        },
+        {
+          role: "user" as const,
+          content: userPrompt
+        }
+      ],
+    };
+  }
+
+  // Add temperature only if model supports it
+  if (!modelConfig?.noTemperature) {
+    baseParams.temperature = 0.7;
+  }
+
+  // Use appropriate token parameter based on model type
+  const requestParams = modelConfig?.usesCompletionTokens
+    ? { ...baseParams, max_completion_tokens: 16000 }
+    : { ...baseParams, max_tokens: 16000 };
+  
+  const completion = await openai.chat.completions.create(requestParams);
 
   let scriptText = completion.choices[0]?.message?.content;
   if (!scriptText) {
@@ -221,22 +286,23 @@ async function generateSection(
 export async function generatePodcastScript(
   topic: string, 
   apiKey: string,
-  setGenerationStage: (stage: GenerationStage) => void
+  setGenerationStage: (stage: GenerationStage) => void,
+  models: ProjectModels
 ): Promise<PodcastScript> {
   try {
     setGenerationStage('detecting-language');
-    const language = await detectLanguage(topic, apiKey);
+    const language = await detectLanguage(topic, apiKey, models.languageDetection);
     
     setGenerationStage('creating-personas');
-    const personas = await generatePersonas(topic, language, apiKey);
+    const personas = await generatePersonas(topic, language, apiKey, models.personaGeneration);
     const personaGenders = parsePersonaGenders(personas);
 
     setGenerationStage('writing-script');
     const sections = await Promise.all([
-      generateSection('opening', topic, language, personas, apiKey),
-      generateSection('background', topic, language, personas, apiKey),
-      generateSection('discussion', topic, language, personas, apiKey),
-      generateSection('conclusion', topic, language, personas, apiKey)
+      generateSection('opening', topic, language, personas, apiKey, models.scriptGeneration),
+      generateSection('background', topic, language, personas, apiKey, models.scriptGeneration),
+      generateSection('discussion', topic, language, personas, apiKey, models.scriptGeneration),
+      generateSection('conclusion', topic, language, personas, apiKey, models.scriptGeneration)
     ]);
 
     const segments = sections.flat();

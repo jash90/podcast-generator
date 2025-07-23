@@ -5,8 +5,11 @@ import TopicInput from './components/TopicInput';
 import Script from './components/Script';
 import AudioPlayer from './components/AudioPlayer';
 import GenerationProgress, { GenerationStage } from './components/GenerationProgress';
+import ModelSelector from './components/ModelSelector';
 import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
+import { DEFAULT_MODELS } from './config/models';
+import type { ProjectModels } from './config/models';
 
 function App() {
   const [apiKey, setApiKey] = useState('');
@@ -16,6 +19,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [generationStage, setGenerationStage] = useState<GenerationStage>(null);
+  const [models, setModels] = useState<ProjectModels>(DEFAULT_MODELS);
+  const [isModelSelectorExpanded, setIsModelSelectorExpanded] = useState(false);
 
   const handleGenerate = async () => {
     if (!apiKey.trim() || !topic.trim()) {
@@ -29,7 +34,7 @@ function App() {
     setGenerationStage('detecting-language');
 
     try {
-      const generatedScript = await generatePodcastScript(topic, apiKey, setGenerationStage);
+      const generatedScript = await generatePodcastScript(topic, apiKey, setGenerationStage, models);
       setScript(generatedScript);
       setGenerationStage('complete');
     } catch (err: any) {
@@ -56,7 +61,7 @@ function App() {
             <ApiKeyInput 
               apiKey={apiKey} 
               onChange={setApiKey}
-              error={error}
+              error={error || undefined}
             />
             
             <div className="mt-6">
@@ -68,6 +73,13 @@ function App() {
               />
             </div>
           </div>
+
+          <ModelSelector
+            models={models}
+            onChange={setModels}
+            isExpanded={isModelSelectorExpanded}
+            onToggle={() => setIsModelSelectorExpanded(!isModelSelectorExpanded)}
+          />
 
           {(isLoading || generationStage === 'complete') && (
             <div className="bg-purple-800/30 p-6 rounded-xl border border-purple-700/50">
@@ -83,6 +95,7 @@ function App() {
               isPlaying={isPlaying} 
               setIsPlaying={setIsPlaying} 
               apiKey={apiKey}
+              ttsModel={models.textToSpeech}
             />
             <Script script={script} />
           </div>

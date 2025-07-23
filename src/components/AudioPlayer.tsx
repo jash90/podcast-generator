@@ -8,9 +8,10 @@ interface AudioPlayerProps {
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
   apiKey: string;
+  ttsModel: string;
 }
 
-function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey }: AudioPlayerProps) {
+function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: AudioPlayerProps) {
   const [currentSegment, setCurrentSegment] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -63,7 +64,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey }: AudioPlayerPro
         await audioContextRef.current.resume();
       }
       
-      const arrayBuffer = await generateAudioForSegment(script.segments[index], apiKey);
+      const arrayBuffer = await generateAudioForSegment(script.segments[index], apiKey, ttsModel);
       const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
       
       if (sourceRef.current) {
@@ -103,7 +104,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey }: AudioPlayerPro
     try {
       setIsDownloading(true);
       setError(null);
-      await downloadFullPodcast(script, apiKey);
+      await downloadFullPodcast(script, apiKey, ttsModel);
     } catch (err) {
       console.error('Download error:', err);
       setError('Failed to download podcast. Please try again.');
