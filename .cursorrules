@@ -1,0 +1,255 @@
+# AI Podcast Generator - Cursor Rules
+
+## Project Overview
+This is a React TypeScript application that generates AI-powered podcast conversations with text-to-speech audio synthesis. The app uses OpenAI's GPT models for content generation and TTS models for audio creation.
+
+## Tech Stack & Architecture
+- **Frontend**: React 18, TypeScript, Vite
+- **Styling**: Tailwind CSS, Lucide React icons
+- **APIs**: OpenAI GPT-4/3.5 for content, OpenAI TTS for audio
+- **Audio**: Web Audio API, sequential processing
+- **PWA**: Service worker, custom favicon, manifest.json
+- **Build**: Vite with TypeScript strict mode
+
+## Code Style & Conventions
+
+### TypeScript
+- Use strict TypeScript with proper type definitions
+- Prefer interfaces over types for object shapes
+- Use functional components with hooks, no class components
+- Export named functions and components (avoid default exports except for main components)
+- Use the "function" keyword for pure functions, not arrow functions for top-level declarations
+
+### React Patterns
+- Functional components with hooks (useState, useEffect, useCallback, useRef)
+- Use React.memo for performance optimization when needed
+- Implement proper cleanup in useEffect return functions
+- Use Suspense with fallbacks for dynamic imports
+- Handle loading and error states explicitly
+
+### File Structure & Naming
+- Use lowercase with dashes for directories (e.g., `components/audio-player`)
+- Use PascalCase for component files (e.g., `AudioPlayer.tsx`)
+- Use camelCase for utility files (e.g., `audioGenerator.ts`)
+- Boolean variables: use auxiliary verbs (`isLoading`, `hasError`, `canDownload`)
+- Function names: descriptive with verbs (`generateAudioForSegment`, `downloadFullPodcast`)
+
+### Error Handling Philosophy
+- Handle errors early with guard clauses and early returns
+- Use the "fail fast" approach - don't continue with invalid data
+- Provide specific, actionable error messages to users
+- Log detailed error information for debugging
+- Implement graceful degradation where possible
+
+## Audio Processing Architecture
+
+### Sequential Processing (CRITICAL)
+- **ALWAYS use sequential processing** for TTS requests, never parallel
+- Use simple for loops with await, not Promise.all()
+- Include 1-second delays between segments to prevent rate limiting
+- Maximum 1 retry attempt with 2-second delay
+- No complex chunking or buffer validation
+
+```typescript
+// ✅ CORRECT: Sequential processing
+for (let i = 0; i < segments.length; i++) {
+  const buffer = await generateAudioForSegment(segment, apiKey, model);
+  audioBuffers.push(buffer);
+  if (i < segments.length - 1) {
+    await delay(1000); // 1 second between segments
+  }
+}
+
+// ❌ WRONG: Parallel processing
+const promises = segments.map(s => generateAudioForSegment(s, apiKey, model));
+const buffers = await Promise.all(promises); // This causes rate limiting!
+```
+
+### Audio Generation Rules
+- Use Uint8Array for caching to prevent ArrayBuffer detachment
+- Simple error handling without complex retry logic
+- Log progress for debugging but keep it simple
+- Use 'audio/mpeg' MIME type for downloads
+- Generate timestamps for unique filenames
+
+### TTS Configuration
+```typescript
+const TTS_CONFIG = {
+  INTER_SEGMENT_DELAY: 1000,    // 1 second between segments
+  MAX_RETRIES: 1,               // Single retry only  
+  RETRY_DELAY: 2000,            // 2 seconds on retry
+}
+```
+
+## API Integration Patterns
+
+### OpenAI Integration
+- Always validate API keys before making requests  
+- Use the createOpenAIClient utility function
+- Handle rate limiting gracefully with delays
+- Provide specific error messages for quota/key/network issues
+- Use streaming for chat completions when possible
+
+### Model Selection
+- Fetch available models dynamically from OpenAI API
+- Filter to curated list of quality models (GPT-4 family)
+- Store API key in localStorage with proper validation
+- Handle model availability changes gracefully
+
+## UI/UX Patterns
+
+### Component Structure
+- Break components into logical, reusable pieces
+- Use composition over large monolithic components
+- Implement proper loading states with spinners
+- Show progress for long operations (script generation, audio download)
+- Use color-coded indicators for different speakers/states
+
+### State Management
+- Use useState for local component state
+- Use useCallback for event handlers that depend on props/state
+- Use useRef for DOM references and mutable values
+- Avoid unnecessary re-renders with proper dependency arrays
+
+### Styling with Tailwind
+- Use mobile-first responsive design
+- Implement consistent color scheme (purple theme)
+- Use proper spacing scale (space-4, space-6, etc.)
+- Implement hover and focus states for interactive elements
+- Use backdrop-blur and transparency for modern glass effects
+
+## PWA & Performance
+
+### Progressive Web App
+- Maintain custom SVG favicon and Apple touch icon
+- Keep manifest.json updated with proper app metadata
+- Implement proper meta tags for SEO and social sharing
+- Support offline functionality where possible
+
+### Performance Optimization
+- Use dynamic imports for code splitting
+- Implement proper image optimization (WebP format)
+- Minimize bundle size by avoiding unnecessary dependencies  
+- Use React.memo and useMemo strategically
+- Clean up resources (audio contexts, URLs, timeouts)
+
+## Debugging & Development
+
+### Logging Strategy
+- Use descriptive console messages with emojis for visibility
+- Log timing information for performance analysis
+- Include context in error messages (segment info, retry attempts)
+- Use different log levels (log, warn, error) appropriately
+
+### Development Patterns  
+- Test download functionality in different browsers
+- Validate audio generation with different text lengths
+- Test error handling with invalid API keys
+- Check memory usage during long audio generation sessions
+
+## Common Anti-Patterns to Avoid
+
+### ❌ Don't Do This
+```typescript
+// Complex parallel processing with error handling
+const results = await Promise.all(segments.map(async (segment) => {
+  try {
+    return await generateWithRetry(segment);
+  } catch (error) {
+    return handleComplexError(error);
+  }
+}));
+
+// Over-engineered buffer validation  
+if (!validateAudioBuffer(buffer) || isArrayBufferDetached(buffer)) {
+  throw new ComplexValidationError();
+}
+
+// Multiple chunk processing with exponential backoff
+for (let attempt = 0; attempt < maxRetries; attempt++) {
+  const delay = Math.pow(2, attempt) * baseDelay;
+  await sleep(delay);
+}
+```
+
+### ✅ Do This Instead
+```typescript
+// Simple sequential processing
+for (const segment of script.segments) {
+  try {
+    const buffer = await generateAudioForSegment(segment, apiKey, model);
+    audioBuffers.push(buffer);
+    await delay(1000); // Simple fixed delay
+  } catch (error) {
+    console.error(`Segment failed:`, error);
+    throw error; // Fail fast
+  }
+}
+
+// Simple buffer validation
+if (!buffer || buffer.byteLength === 0) {
+  throw new Error('Empty audio buffer');
+}
+
+// Single retry with fixed delay
+try {
+  return await operation();
+} catch (error) {
+  console.log('Retrying...');
+  await delay(2000);
+  return await operation();
+}
+```
+
+## Testing Strategies
+
+### Manual Testing Checklist
+- [ ] API key validation and error messages
+- [ ] Script generation with different topics and languages
+- [ ] Audio generation for various text lengths
+- [ ] Download functionality across browsers
+- [ ] Progress indicators during long operations
+- [ ] Error recovery and user feedback
+- [ ] PWA installation and offline behavior
+
+### Performance Testing
+- [ ] Memory usage during audio generation
+- [ ] Rate limiting compliance with sequential processing
+- [ ] Large script handling (10+ segments)
+- [ ] Browser compatibility (Chrome, Firefox, Safari)
+
+## Project-Specific Guidelines
+
+### Voice Assignment
+- Use intelligent voice matching based on persona characteristics
+- Maintain voice consistency throughout conversations
+- Log voice assignments for debugging
+- Handle missing persona data gracefully
+
+### Script Generation
+- Generate individual responses for natural dialogue flow
+- Support multiple languages with proper detection
+- Create diverse perspectives (supporting vs alternative viewpoints)
+- Include cultural context and speaking patterns
+
+### Audio Player
+- Implement segment-by-segment playback with visual indicators
+- Support play/pause, skip, replay functionality
+- Show real-time progress with smooth animations
+- Preload audio segments for better user experience
+
+## Dependencies & Updates
+
+### Core Dependencies
+- Keep React, TypeScript, and Vite updated
+- Monitor OpenAI API changes and model availability
+- Update Tailwind CSS for new features
+- Maintain PWA compatibility
+
+### Security Considerations
+- Never commit API keys to version control
+- Validate all user inputs before API calls
+- Implement proper CORS handling for API requests
+- Use environment variables for sensitive configuration
+
+Remember: **Simplicity and reliability over complexity**. The original sequential approach works better than over-engineered parallel processing for TTS APIs. 
