@@ -6,6 +6,7 @@ import Script from './components/Script';
 import AudioPlayer from './components/AudioPlayer';
 import GenerationProgress, { GenerationStage } from './components/GenerationProgress';
 import ModelSelector from './components/ModelSelector';
+import TextStats from './components/TextStats';
 import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
 import { DEFAULT_MODELS, fetchModelsFromAPI, updateModels } from './config/models';
@@ -175,6 +176,7 @@ function App() {
               apiKey={apiKey}
               ttsModel={models.textToSpeech}
             />
+            <TextStats script={script} />
             <Script script={script} />
           </div>
         )}
