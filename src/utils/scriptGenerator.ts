@@ -108,109 +108,144 @@ Requirements:
 - All questions should be in ${language}
 `;
 
-const SECTION_PROMPTS = {
-  opening: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
-Create the opening section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
+// Individual response generation prompts for longer, more detailed answers
+const INDIVIDUAL_RESPONSE_PROMPTS = {
+  hostIntroduction: (topic: string, language: string, hostPersona: PersonaCollection['host']) => `
+You are ${hostPersona.name}, a ${hostPersona.background} with expertise in ${hostPersona.expertise.join(', ')}. Your speaking style is ${hostPersona.voiceCharacteristics.tone} and ${hostPersona.voiceCharacteristics.style}.
 
-${personas}
+Create a detailed, engaging opening introduction for your podcast about "${topic}" in ${language}.
 
-Opening Questions to Use:
-${topics.openingQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+Your introduction should:
+- Welcome listeners warmly and professionally (2-3 sentences)
+- Introduce the topic with compelling context and relevance (3-4 sentences)
+- Explain why this topic matters now (2-3 sentences)
+- Briefly preview what listeners will learn (1-2 sentences)
+- Set an engaging, professional tone that matches your personality
 
-The opening should include:
-- Host introduces the show and topic
-- Host introduces guests with their expertise
-- Each guest briefly introduces themselves
-- Host asks 1-2 opening questions to set the stage
+Speak naturally as ${hostPersona.name} would, incorporating your ${hostPersona.personality.join(', ')} personality traits.
 
-Return ONLY a JSON array with the following format:
-[
-  {"type": "host", "text": "Welcome to the show..."},
-  {"type": "guest1", "text": "Thank you for having me..."},
-  {"type": "guest2", "text": "Glad to be here..."},
-  {"type": "host", "text": "Opening question..."}
-]
+Generate a response that is 150-250 words long for natural speech flow.
+
+Return ONLY the speech text with no additional formatting or labels.
 `,
 
-  background: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
-Create the background section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
+  guestIntroduction: (guestPersona: PersonaCollection['guest1'], hostPersona: PersonaCollection['host'], language: string) => `
+The host ${hostPersona.name} has just introduced you. You are ${guestPersona.name}, a ${guestPersona.background} with expertise in ${guestPersona.expertise.join(', ')}.
 
-${personas}
+Your speaking style is ${guestPersona.voiceCharacteristics.tone} and ${guestPersona.voiceCharacteristics.style}, with a ${guestPersona.voiceCharacteristics.pace} pace.
 
-Background Topics to Cover:
-${topics.subtopics.filter(t => t.perspective === 'neutral').map((subtopic, i) => `
-${i + 1}. ${subtopic.title}: ${subtopic.description}
-Host Questions: ${subtopic.hostQuestions.slice(0, 2).join(' / ')}
-`).join('\n')}
+Create a detailed self-introduction in ${language} that includes:
+- Thank the host warmly (1 sentence)
+- Introduce yourself and your background (2-3 sentences)
+- Explain your specific expertise and experience (3-4 sentences)
+- Share why you're passionate about this topic (2-3 sentences)
+- Express excitement about the discussion (1 sentence)
 
-The background should include:
-- Host provides historical context using the questions above
-- Host asks specific questions about background and development
-- Guests provide expert insights and context
-- Natural flow between questions and responses
+Speak naturally as ${guestPersona.name} would, incorporating your ${guestPersona.personality.join(', ')} personality traits.
 
-Return ONLY a JSON array with the following format:
-[
-  {"type": "host", "text": "Let's start with the background..."},
-  {"type": "guest1", "text": "From my perspective..."},
-  {"type": "guest2", "text": "Adding to that..."}
-]
+Generate a response that is 120-200 words long for engaging self-introduction.
+
+Return ONLY the speech text with no additional formatting or labels.
 `,
 
-  discussion: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
-Create the main discussion section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
+  hostQuestion: (question: string, hostPersona: PersonaCollection['host'], topic: string, language: string, targetGuest?: string) => `
+You are ${hostPersona.name}, conducting a professional podcast interview about "${topic}" in ${language}.
 
-${personas}
+Your speaking style is ${hostPersona.voiceCharacteristics.tone} and ${hostPersona.voiceCharacteristics.style}.
 
-Main Discussion Topics and Questions:
-${topics.subtopics.map((subtopic, i) => `
-${i + 1}. ${subtopic.title} (${subtopic.perspective})
-   Description: ${subtopic.description}
-   Target: ${subtopic.targetGuest || 'both'}
-   Host Questions:
-   ${subtopic.hostQuestions.map((q) => `   - ${q}`).join('\n')}
-   Follow-ups:
-   ${subtopic.followUpQuestions.map((q) => `   - ${q}`).join('\n')}
-`).join('\n')}
+Ask this question naturally and professionally: "${question}"
 
-The discussion should include:
-- Host asks the prepared questions in a natural conversational flow
-- Each guest responds based on their expertise and perspective
-- Host uses follow-up questions to dig deeper
-- Guests respond to each other's points
-- Host moderates and guides the conversation between topics
+Your question delivery should:
+- Lead into the question with 1-2 sentences of context or transition
+- Ask the main question clearly and engagingly
+- ${targetGuest ? `Direct it specifically to ${targetGuest} if appropriate` : 'Allow either guest to respond'}
+- Add a brief clarification or follow-up angle if helpful (1 sentence)
 
-Create a dynamic conversation that uses these questions naturally. Don't make it feel like a rigid Q&A.
+Speak naturally as ${hostPersona.name} would, incorporating your ${hostPersona.personality.join(', ')} personality traits.
 
-Return ONLY a JSON array with the following format:
-[
-  {"type": "host", "text": "Let's dive into the first major topic..."},
-  {"type": "guest1", "text": "My perspective on this is..."},
-  {"type": "guest2", "text": "I see it differently..."}
-]
+Generate a response that is 60-120 words long for natural question delivery.
+
+Return ONLY the speech text with no additional formatting or labels.
 `,
 
-  conclusion: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
-Create the conclusion section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
+  guestResponse: (question: string, guestPersona: PersonaCollection['guest1'], topic: string, language: string, questionContext?: string) => `
+You are ${guestPersona.name}, a ${guestPersona.background} with expertise in ${guestPersona.expertise.join(', ')}.
 
-${personas}
+The host has asked: "${question}"
+${questionContext ? `Context: ${questionContext}` : ''}
 
-Closing Questions to Use:
-${topics.closingQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+Your speaking style is ${guestPersona.voiceCharacteristics.tone} and ${guestPersona.voiceCharacteristics.style}, with a ${guestPersona.voiceCharacteristics.pace} pace.
 
-The conclusion should include:
-- Host asks closing questions to get final thoughts
-- Host summarizes key points from the discussion
-- Each guest provides final insights and takeaways
-- Host closes the show professionally
+Provide a comprehensive, detailed response in ${language} that includes:
+- Acknowledge the question (1 sentence)
+- Share your expertise and insights (4-6 sentences)
+- Provide specific examples, data, or experiences (3-4 sentences)
+- Explain the broader implications or context (2-3 sentences)
+- Connect to practical applications or real-world impact (2-3 sentences)
+- Conclude with your key takeaway or perspective (1-2 sentences)
 
-Return ONLY a JSON array with the following format:
-[
-  {"type": "host", "text": "As we wrap up, let me ask..."},
-  {"type": "guest1", "text": "My final thought is..."},
-  {"type": "guest2", "text": "In conclusion..."},
-  {"type": "host", "text": "Thank you both for this fascinating discussion..."}
-]
+Speak naturally as ${guestPersona.name} would, incorporating your ${guestPersona.personality.join(', ')} personality traits and drawing from your background in ${guestPersona.background}.
+
+Generate a response that is 200-350 words long for comprehensive, engaging discussion.
+
+Return ONLY the speech text with no additional formatting or labels.
+`,
+
+  hostTransition: (fromTopic: string, toTopic: string, hostPersona: PersonaCollection['host'], language: string) => `
+You are ${hostPersona.name}, conducting a professional podcast interview in ${language}.
+
+Your speaking style is ${hostPersona.voiceCharacteristics.tone} and ${hostPersona.voiceCharacteristics.style}.
+
+Create a smooth transition from discussing "${fromTopic}" to "${toTopic}" that includes:
+- Acknowledge the previous discussion point (1 sentence)
+- Bridge to the new topic naturally (1-2 sentences)
+- Introduce the new topic with engaging context (1-2 sentences)
+
+Speak naturally as ${hostPersona.name} would, incorporating your ${hostPersona.personality.join(', ')} personality traits.
+
+Generate a response that is 40-80 words long for natural topic transition.
+
+Return ONLY the speech text with no additional formatting or labels.
+`,
+
+  hostSummary: (topic: string, keyPoints: string[], hostPersona: PersonaCollection['host'], language: string) => `
+You are ${hostPersona.name}, wrapping up a professional podcast discussion about "${topic}" in ${language}.
+
+Your speaking style is ${hostPersona.voiceCharacteristics.tone} and ${hostPersona.voiceCharacteristics.style}.
+
+Create a comprehensive conclusion that includes:
+- Transition into the wrap-up (1 sentence)
+- Summarize the key insights discussed: ${keyPoints.join(', ')} (3-4 sentences)
+- Highlight the most important takeaways for listeners (2-3 sentences)
+- Thank your guests professionally (1-2 sentences)
+- Close the show with your signature style (1-2 sentences)
+
+Speak naturally as ${hostPersona.name} would, incorporating your ${hostPersona.personality.join(', ')} personality traits.
+
+Generate a response that is 150-250 words long for a comprehensive conclusion.
+
+Return ONLY the speech text with no additional formatting or labels.
+`,
+
+  guestFinalThoughts: (topic: string, guestPersona: PersonaCollection['guest1'], mainDiscussionPoints: string[], language: string) => `
+You are ${guestPersona.name}, providing final thoughts on "${topic}" in ${language}.
+
+Your speaking style is ${guestPersona.voiceCharacteristics.tone} and ${guestPersona.voiceCharacteristics.style}.
+
+The main points discussed were: ${mainDiscussionPoints.join(', ')}
+
+Provide comprehensive final thoughts that include:
+- Express appreciation for the discussion (1 sentence)
+- Reflect on the most important aspects discussed (2-3 sentences)
+- Share your key message or call-to-action for listeners (2-3 sentences)
+- Provide forward-looking insights or predictions (2-3 sentences)
+- End with your personal takeaway or final wisdom (1-2 sentences)
+
+Speak naturally as ${guestPersona.name} would, incorporating your ${guestPersona.personality.join(', ')} personality traits and expertise in ${guestPersona.expertise.join(', ')}.
+
+Generate a response that is 150-250 words long for meaningful final thoughts.
+
+Return ONLY the speech text with no additional formatting or labels.
 `
 };
 
@@ -480,37 +515,31 @@ Guest 2: ${personas.guest2.name}
 `.trim();
 }
 
-async function generateSection(
-  section: keyof typeof SECTION_PROMPTS,
-  topic: string,
-  language: string,
-  personas: PersonaCollection,
-  topics: PodcastTopics,
+async function generateIndividualResponse(
+  prompt: string,
   apiKey: string,
-  model: string
-): Promise<PodcastSegment[]> {
+  model: string,
+  speakerType: 'host' | 'guest1' | 'guest2'
+): Promise<string> {
   const openai = createOpenAIClient(apiKey);
   const modelConfig = getModelById(model);
   
-  const systemInstructions = `You are an expert podcast script writer who creates engaging, natural-flowing discussions in ${language}. Use the provided questions and topics to create realistic dialogue that doesn't sound scripted. Return ONLY the JSON array as specified, with no additional text or formatting.`;
-  const userPrompt = SECTION_PROMPTS[section](topic, language, personasToText(personas), topics);
+  const systemInstructions = `You are an expert at creating natural, engaging podcast dialogue. Generate responses that sound conversational and authentic, not scripted. Focus on creating longer, more detailed responses that provide comprehensive insights and maintain listener engagement.`;
   
   // Build the request parameters
   let baseParams: any;
   
   if (modelConfig?.noSystemRole) {
-    // For o1/o3 models that don't support system role, incorporate instructions into user message
     baseParams = {
       model,
       messages: [
         {
           role: "user" as const,
-          content: `${systemInstructions}\n\n${userPrompt}`
+          content: `${systemInstructions}\n\n${prompt}`
         }
       ],
     };
   } else {
-    // For regular models that support system role
     baseParams = {
       model,
       messages: [
@@ -520,7 +549,7 @@ async function generateSection(
         },
         {
           role: "user" as const,
-          content: userPrompt
+          content: prompt
         }
       ],
     };
@@ -528,43 +557,307 @@ async function generateSection(
 
   // Add temperature only if model supports it
   if (!modelConfig?.noTemperature) {
-    baseParams.temperature = 0.7;
+    baseParams.temperature = 0.8; // Higher temperature for more creative, natural responses
   }
 
   // Use appropriate token parameter based on model type
-  const requestParams = modelConfig?.usesCompletionTokens
-    ? { ...baseParams, max_completion_tokens: 16000 }
-    : { ...baseParams, max_tokens: 16000 };
+  const requestParams = modelConfig?.usesCompletionTokens 
+    ? { ...baseParams, max_completion_tokens: 4000 }
+    : { ...baseParams, max_tokens: 4000 };
   
   const completion = await openai.chat.completions.create(requestParams);
 
-  const scriptText = completion.choices[0]?.message?.content;
-  if (!scriptText) {
-    throw new Error(`Failed to generate ${section} section`);
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error(`Failed to generate ${speakerType} response`);
   }
 
-  // Clean and parse the JSON response
-  try {
-    let cleanScriptText = scriptText.trim();
-    if (cleanScriptText.startsWith('```json')) {
-      cleanScriptText = cleanScriptText.replace(/```json\s*/, '').replace(/```\s*$/, '');
-    } else if (cleanScriptText.startsWith('```')) {
-      cleanScriptText = cleanScriptText.replace(/```\s*/, '').replace(/```\s*$/, '');
+  return content.trim();
+}
+
+async function generateOpeningSection(
+  topic: string,
+  language: string,
+  personas: PersonaCollection,
+  topics: PodcastTopics,
+  apiKey: string,
+  model: string,
+  onProgress: (segment: number, total: number) => void
+): Promise<PodcastSegment[]> {
+  const segments: PodcastSegment[] = [];
+  
+  // 1. Host introduction
+  onProgress(1, 4);
+  const hostIntro = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.hostIntroduction(topic, language, personas.host),
+    apiKey,
+    model,
+    'host'
+  );
+  segments.push({ speaker: personas.host.name, text: hostIntro, type: 'host' });
+
+  // 2. Host introduces guest 1
+  onProgress(2, 4);
+  const hostIntroGuest1 = await generateIndividualResponse(
+    `You are ${personas.host.name}. Introduce your first guest ${personas.guest1.name}, highlighting their background as ${personas.guest1.background} and expertise in ${personas.guest1.expertise.join(', ')}. Keep it warm and professional. Speak in ${language}. (50-80 words)`,
+    apiKey,
+    model,
+    'host'
+  );
+  segments.push({ speaker: personas.host.name, text: hostIntroGuest1, type: 'host' });
+
+  // 3. Guest 1 self-introduction
+  const guest1Intro = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.guestIntroduction(personas.guest1, personas.host, language),
+    apiKey,
+    model,
+    'guest1'
+  );
+  segments.push({ speaker: personas.guest1.name, text: guest1Intro, type: 'guest1' });
+
+  // 4. Host introduces guest 2 and guest 2 responds
+  onProgress(3, 4);
+  const hostIntroGuest2 = await generateIndividualResponse(
+    `You are ${personas.host.name}. Introduce your second guest ${personas.guest2.name}, highlighting their background as ${personas.guest2.background} and expertise in ${personas.guest2.expertise.join(', ')}. Keep it warm and professional. Speak in ${language}. (50-80 words)`,
+    apiKey,
+    model,
+    'host'
+  );
+  segments.push({ speaker: personas.host.name, text: hostIntroGuest2, type: 'host' });
+
+  onProgress(4, 4);
+  const guest2Intro = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.guestIntroduction(personas.guest2, personas.host, language),
+    apiKey,
+    model,
+    'guest2'
+  );
+  segments.push({ speaker: personas.guest2.name, text: guest2Intro, type: 'guest2' });
+
+  return segments;
+}
+
+async function generateBackgroundSection(
+  topic: string,
+  language: string,
+  personas: PersonaCollection,
+  topics: PodcastTopics,
+  apiKey: string,
+  model: string,
+  onProgress: (segment: number, total: number) => void
+): Promise<PodcastSegment[]> {
+  const segments: PodcastSegment[] = [];
+  const backgroundTopics = topics.subtopics.filter(t => t.perspective === 'neutral');
+  
+  if (backgroundTopics.length === 0) {
+    // Use first 2 subtopics if no neutral ones
+    backgroundTopics.push(...topics.subtopics.slice(0, 2));
+  }
+
+  let segmentCount = 0;
+  const totalSegments = backgroundTopics.length * 3; // Host question + 2 guest responses per topic
+
+  for (const subtopic of backgroundTopics.slice(0, 2)) { // Limit to 2 background topics
+    // Host asks question
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const hostQuestion = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.hostQuestion(subtopic.hostQuestions[0], personas.host, topic, language),
+      apiKey,
+      model,
+      'host'
+    );
+    segments.push({ speaker: personas.host.name, text: hostQuestion, type: 'host' });
+
+    // Guest 1 responds
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const guest1Response = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.guestResponse(subtopic.hostQuestions[0], personas.guest1, topic, language, subtopic.description),
+      apiKey,
+      model,
+      'guest1'
+    );
+    segments.push({ speaker: personas.guest1.name, text: guest1Response, type: 'guest1' });
+
+    // Guest 2 adds perspective
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const guest2Response = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.guestResponse(subtopic.hostQuestions[0], personas.guest2, topic, language, subtopic.description),
+      apiKey,
+      model,
+      'guest2'
+    );
+    segments.push({ speaker: personas.guest2.name, text: guest2Response, type: 'guest2' });
+  }
+
+  return segments;
+}
+
+async function generateDiscussionSection(
+  topic: string,
+  language: string,
+  personas: PersonaCollection,
+  topics: PodcastTopics,
+  apiKey: string,
+  model: string,
+  onProgress: (segment: number, total: number) => void
+): Promise<PodcastSegment[]> {
+  const segments: PodcastSegment[] = [];
+  const discussionTopics = topics.subtopics.filter(t => t.perspective !== 'neutral');
+  
+  if (discussionTopics.length === 0) {
+    discussionTopics.push(...topics.subtopics);
+  }
+
+  let segmentCount = 0;
+  const totalSegments = discussionTopics.length * 5; // More segments for detailed discussion
+
+  for (const subtopic of discussionTopics) {
+    // Host introduces topic and asks first question
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const hostIntro = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.hostQuestion(subtopic.hostQuestions[0], personas.host, topic, language, subtopic.targetGuest),
+      apiKey,
+      model,
+      'host'
+    );
+    segments.push({ speaker: personas.host.name, text: hostIntro, type: 'host' });
+
+    // Primary guest responds (based on target)
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const primaryGuest = subtopic.targetGuest === 'guest2' ? personas.guest2 : personas.guest1;
+    const primaryGuestType = subtopic.targetGuest === 'guest2' ? 'guest2' : 'guest1';
+    
+    const primaryResponse = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.guestResponse(subtopic.hostQuestions[0], primaryGuest, topic, language, subtopic.description),
+      apiKey,
+      model,
+      primaryGuestType
+    );
+    segments.push({ speaker: primaryGuest.name, text: primaryResponse, type: primaryGuestType });
+
+    // Host asks follow-up or secondary guest responds
+    if (subtopic.followUpQuestions.length > 0) {
+      segmentCount++;
+      onProgress(segmentCount, totalSegments);
+      
+      const followUp = await generateIndividualResponse(
+        INDIVIDUAL_RESPONSE_PROMPTS.hostQuestion(subtopic.followUpQuestions[0], personas.host, topic, language),
+        apiKey,
+        model,
+        'host'
+      );
+      segments.push({ speaker: personas.host.name, text: followUp, type: 'host' });
     }
 
-    const segments = JSON.parse(cleanScriptText) as PodcastSegment[];
-    return segments;
-  } catch (parseError) {
-    console.error(`Error parsing ${section} section JSON:`, parseError);
-    console.error('Raw content:', scriptText);
-    throw new Error(`Failed to parse ${section} section JSON response`);
+    // Other guest provides alternative perspective
+    segmentCount++;
+    onProgress(segmentCount, totalSegments);
+    
+    const secondaryGuest = subtopic.targetGuest === 'guest2' ? personas.guest1 : personas.guest2;
+    const secondaryGuestType = subtopic.targetGuest === 'guest2' ? 'guest1' : 'guest2';
+    
+    const alternativeResponse = await generateIndividualResponse(
+      INDIVIDUAL_RESPONSE_PROMPTS.guestResponse(
+        subtopic.followUpQuestions[0] || `What's your perspective on ${subtopic.title}?`, 
+        secondaryGuest, 
+        topic, 
+        language, 
+        subtopic.description
+      ),
+      apiKey,
+      model,
+      secondaryGuestType
+    );
+    segments.push({ speaker: secondaryGuest.name, text: alternativeResponse, type: secondaryGuestType });
+
+    // Host transition to next topic (if not last)
+    if (discussionTopics.indexOf(subtopic) < discussionTopics.length - 1) {
+      segmentCount++;
+      onProgress(segmentCount, totalSegments);
+      
+      const nextTopic = discussionTopics[discussionTopics.indexOf(subtopic) + 1];
+      const transition = await generateIndividualResponse(
+        INDIVIDUAL_RESPONSE_PROMPTS.hostTransition(subtopic.title, nextTopic.title, personas.host, language),
+        apiKey,
+        model,
+        'host'
+      );
+      segments.push({ speaker: personas.host.name, text: transition, type: 'host' });
+    }
   }
+
+  return segments;
+}
+
+async function generateConclusionSection(
+  topic: string,
+  language: string,
+  personas: PersonaCollection,
+  topics: PodcastTopics,
+  apiKey: string,
+  model: string,
+  onProgress: (segment: number, total: number) => void
+): Promise<PodcastSegment[]> {
+  const segments: PodcastSegment[] = [];
+  const keyPoints = topics.subtopics.map(t => t.title);
+
+  // 1. Host asks closing question to guest 1
+  onProgress(1, 4);
+  const hostClosingQ1 = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.hostQuestion(topics.closingQuestions[0], personas.host, topic, language, 'guest1'),
+    apiKey,
+    model,
+    'host'
+  );
+  segments.push({ speaker: personas.host.name, text: hostClosingQ1, type: 'host' });
+
+  // 2. Guest 1 final thoughts
+  onProgress(2, 4);
+  const guest1Final = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.guestFinalThoughts(topic, personas.guest1, keyPoints, language),
+    apiKey,
+    model,
+    'guest1'
+  );
+  segments.push({ speaker: personas.guest1.name, text: guest1Final, type: 'guest1' });
+
+  // 3. Guest 2 final thoughts
+  onProgress(3, 4);
+  const guest2Final = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.guestFinalThoughts(topic, personas.guest2, keyPoints, language),
+    apiKey,
+    model,
+    'guest2'
+  );
+  segments.push({ speaker: personas.guest2.name, text: guest2Final, type: 'guest2' });
+
+  // 4. Host conclusion
+  onProgress(4, 4);
+  const hostConclusion = await generateIndividualResponse(
+    INDIVIDUAL_RESPONSE_PROMPTS.hostSummary(topic, keyPoints, personas.host, language),
+    apiKey,
+    model,
+    'host'
+  );
+  segments.push({ speaker: personas.host.name, text: hostConclusion, type: 'host' });
+
+  return segments;
 }
 
 export async function generatePodcastScript(
   topic: string, 
   apiKey: string,
-  setGenerationStage: (stage: GenerationStage) => void,
+  setGenerationStage: (stage: GenerationStage, currentSegment?: number, totalSegments?: number) => void,
   models: ProjectModels
 ): Promise<PodcastScript> {
   try {
@@ -586,15 +879,37 @@ export async function generatePodcastScript(
     setGenerationStage('generating-topics');
     const topics = await generateDiscussionTopics(topic, language, personas, apiKey, models.scriptGeneration);
 
-    setGenerationStage('writing-script');
-    const sections = await Promise.all([
-      generateSection('opening', topic, language, personas, topics, apiKey, models.scriptGeneration),
-      generateSection('background', topic, language, personas, topics, apiKey, models.scriptGeneration),
-      generateSection('discussion', topic, language, personas, topics, apiKey, models.scriptGeneration),
-      generateSection('conclusion', topic, language, personas, topics, apiKey, models.scriptGeneration)
-    ]);
+    // Generate sections individually with progress tracking
+    setGenerationStage('generating-opening-responses');
+    const openingSegments = await generateOpeningSection(
+      topic, language, personas, topics, apiKey, models.scriptGeneration,
+      (current, total) => setGenerationStage('generating-opening-responses', current, total)
+    );
 
-    const segments = sections.flat();
+    setGenerationStage('generating-background-responses');
+    const backgroundSegments = await generateBackgroundSection(
+      topic, language, personas, topics, apiKey, models.scriptGeneration,
+      (current, total) => setGenerationStage('generating-background-responses', current, total)
+    );
+
+    setGenerationStage('generating-discussion-responses');
+    const discussionSegments = await generateDiscussionSection(
+      topic, language, personas, topics, apiKey, models.scriptGeneration,
+      (current, total) => setGenerationStage('generating-discussion-responses', current, total)
+    );
+
+    setGenerationStage('generating-conclusion-responses');
+    const conclusionSegments = await generateConclusionSection(
+      topic, language, personas, topics, apiKey, models.scriptGeneration,
+      (current, total) => setGenerationStage('generating-conclusion-responses', current, total)
+    );
+
+    const segments = [
+      ...openingSegments,
+      ...backgroundSegments,
+      ...discussionSegments,  
+      ...conclusionSegments
+    ];
 
     setGenerationStage('initializing-voices');
     return { 

@@ -5,23 +5,38 @@ export type GenerationStage =
   | 'detecting-language'
   | 'creating-personas'
   | 'generating-topics'
-  | 'writing-script'
+  | 'generating-opening-responses'
+  | 'generating-background-responses'
+  | 'generating-discussion-responses'
+  | 'generating-conclusion-responses'
   | 'initializing-voices'
   | 'complete'
   | null;
 
 interface GenerationProgressProps {
   currentStage: GenerationStage;
+  currentSegment?: number;
+  totalSegments?: number;
 }
 
-function GenerationProgress({ currentStage }: GenerationProgressProps) {
+function GenerationProgress({ currentStage, currentSegment, totalSegments }: GenerationProgressProps) {
   const stages = [
     { id: 'detecting-language', label: 'Detecting Language' },
     { id: 'creating-personas', label: 'Creating Personas' },
     { id: 'generating-topics', label: 'Generating Discussion Topics' },
-    { id: 'writing-script', label: 'Writing Script' },
+    { id: 'generating-opening-responses', label: 'Generating Opening Responses' },
+    { id: 'generating-background-responses', label: 'Generating Background Responses' },
+    { id: 'generating-discussion-responses', label: 'Generating Discussion Responses' },
+    { id: 'generating-conclusion-responses', label: 'Generating Conclusion Responses' },
     { id: 'initializing-voices', label: 'Initializing Voices' },
   ];
+
+  const getStageLabel = (stage: typeof stages[0]) => {
+    if (currentStage === stage.id && currentSegment && totalSegments) {
+      return `${stage.label} (${currentSegment}/${totalSegments})`;
+    }
+    return stage.label;
+  };
 
   return (
     <div className="space-y-2">
@@ -52,11 +67,17 @@ function GenerationProgress({ currentStage }: GenerationProgressProps) {
                 ? 'text-purple-200'
                 : 'text-purple-400'
             }`}>
-              {stage.label}
+              {getStageLabel(stage)}
             </span>
           </div>
         ))}
       </div>
+      
+      {currentStage && currentStage.includes('generating-') && currentStage !== 'generating-topics' && (
+        <div className="text-xs text-purple-400 mt-2 px-2">
+          Generating detailed individual responses for natural conversation flow
+        </div>
+      )}
     </div>
   );
 }

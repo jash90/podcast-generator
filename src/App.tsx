@@ -10,7 +10,7 @@ import TextStats from './components/TextStats';
 import TopicsDisplay from './components/TopicsDisplay';
 import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
-import { DEFAULT_MODELS, fetchModelsFromAPI, updateModels } from './config/models';
+import { DEFAULT_MODELS } from './config/models';
 import type { ProjectModels } from './config/models';
 import { getStorageItem, setStorageItem, removeStorageItem } from './utils/storage';
 
@@ -24,10 +24,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [generationStage, setGenerationStage] = useState<GenerationStage>(null);
+  const [currentSegment, setCurrentSegment] = useState<number | undefined>(undefined);
+  const [totalSegments, setTotalSegments] = useState<number | undefined>(undefined);
   const [models, setModels] = useState<ProjectModels>(DEFAULT_MODELS);
   const [isModelSelectorExpanded, setIsModelSelectorExpanded] = useState(false);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
 
   // Load API key from localStorage on mount
   useEffect(() => {
@@ -46,51 +46,9 @@ function App() {
     }
   }, [apiKey]);
 
-  // Fetch models when API key changes
-  useEffect(() => {
-    const fetchModels = async () => {
-      if (!apiKey.trim()) return;
-      
-      try {
-        setIsLoadingModels(true);
-        setModelsError(null);
-        const fetchedModels = await fetchModelsFromAPI(apiKey);
-        updateModels(fetchedModels);
-        
-        // Update current models to use only available models
-        const availableChatModels = fetchedModels.chat.map(m => m.id);
-        const availableTTSModels = fetchedModels.tts.map(m => m.id);
-        
-        setModels(currentModels => ({
-          personaGeneration: availableChatModels.includes(currentModels.personaGeneration) 
-            ? currentModels.personaGeneration 
-            : availableChatModels[0] || 'gpt-3.5-turbo',
-          scriptGeneration: availableChatModels.includes(currentModels.scriptGeneration)
-            ? currentModels.scriptGeneration
-            : availableChatModels[0] || 'gpt-3.5-turbo',
-          languageDetection: availableChatModels.includes(currentModels.languageDetection)
-            ? currentModels.languageDetection
-            : availableChatModels[0] || 'gpt-3.5-turbo',
-          textToSpeech: availableTTSModels.includes(currentModels.textToSpeech)
-            ? currentModels.textToSpeech
-            : availableTTSModels[0] || 'tts-1'
-        }));
-        
-      } catch (err: unknown) {
-        setModelsError('Failed to fetch models from OpenAI API. Using fallback models.');
-        console.warn('Models fetch error:', err);
-      } finally {
-        setIsLoadingModels(false);
-      }
-    };
-
-    // Debounce API calls
-    const timeoutId = setTimeout(fetchModels, 500);
-    return () => clearTimeout(timeoutId);
-  }, [apiKey]);
-
   const handleApiKeyChange = (newApiKey: string) => {
     setApiKey(newApiKey);
+    setError(null);
   };
 
   const handleClearApiKey = () => {
@@ -108,15 +66,30 @@ function App() {
     setIsLoading(true);
     setScript(null);
     setGenerationStage('detecting-language');
+    setCurrentSegment(undefined);
+    setTotalSegments(undefined);
 
     try {
-      const generatedScript = await generatePodcastScript(topic, apiKey, setGenerationStage, models);
+      const generatedScript = await generatePodcastScript(
+        topic, 
+        apiKey, 
+        (stage, current, total) => {
+          setGenerationStage(stage);
+          setCurrentSegment(current);
+          setTotalSegments(total);
+        }, 
+        models
+      );
       setScript(generatedScript);
       setGenerationStage('complete');
+      setCurrentSegment(undefined);
+      setTotalSegments(undefined);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to generate podcast script. Please try again.';
       setError(errorMessage);
       setGenerationStage(null);
+      setCurrentSegment(undefined);
+      setTotalSegments(undefined);
     } finally {
       setIsLoading(false);
     }
@@ -157,35 +130,39 @@ function App() {
             onChange={setModels}
             isExpanded={isModelSelectorExpanded}
             onToggle={() => setIsModelSelectorExpanded(!isModelSelectorExpanded)}
-            isLoadingModels={isLoadingModels}
-            modelsError={modelsError}
+            isLoadingModels={false}
+            modelsError={null}
           />
 
           {(isLoading || generationStage === 'complete') && (
             <div className="bg-purple-800/30 p-6 rounded-xl border border-purple-700/50">
-              <GenerationProgress currentStage={generationStage} />
+              <GenerationProgress 
+                currentStage={generationStage} 
+                currentSegment={currentSegment}
+                totalSegments={totalSegments}
+              />
+            </div>
+          )}
+
+          {script && (
+            <div className="space-y-6">
+              {script.topics && (
+                <TopicsDisplay topics={script.topics} />
+              )}
+              
+              <AudioPlayer
+                script={script}
+                isPlaying={isPlaying}
+                setIsPlaying={setIsPlaying}
+                apiKey={apiKey}
+                ttsModel={models.textToSpeech}
+              />
+              
+              <Script script={script} />
+              <TextStats script={script} />
             </div>
           )}
         </div>
-
-        {script && (
-          <div className="space-y-6">
-            {script.topics && (
-              <TopicsDisplay topics={script.topics} />
-            )}
-            
-            <AudioPlayer
-              script={script}
-              isPlaying={isPlaying}
-              setIsPlaying={setIsPlaying}
-              apiKey={apiKey}
-              ttsModel={models.textToSpeech}
-            />
-            
-            <Script script={script} />
-            <TextStats script={script} />
-          </div>
-        )}
       </div>
     </div>
   );
