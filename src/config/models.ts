@@ -20,18 +20,37 @@ export interface ModelConfig {
   noTemperature?: boolean; // For o1/o3 models that don't support temperature customization
 }
 
+// Allowed chat models for Persona Generation, Script Generation, and Language Detection
+const ALLOWED_CHAT_MODELS = [
+  'gpt-4',           // GPT 4
+  'gpt-4o-mini',     // GPT 4.1 mini (mapped to GPT-4o Mini)
+  'gpt-4.1',         // GPT 4.1
+  'gpt-4o',          // GPT 4o
+  'o1',              // o1
+  'o1-preview',      // o1 (alternative naming)
+  'o1-mini',         // o1 mini
+  'o3',              // o3
+  'o3-preview',      // o3 (alternative naming)
+  'o3-mini'          // o3 mini
+];
+
+// Check if a chat model is in the allowed list
+function isAllowedChatModel(modelId: string): boolean {
+  return ALLOWED_CHAT_MODELS.includes(modelId);
+}
+
 // Model configuration rules based on model ID patterns
 const MODEL_RULES = {
   // o1/o3 reasoning models have special limitations
   isReasoningModel: (id: string) => id.startsWith('o1') || id.startsWith('o3'),
   // TTS models
   isTTSModel: (id: string) => id.startsWith('tts-') || id === 'gpt-4o-mini-tts',
-  // Chat models
-  isChatModel: (id: string) => !id.startsWith('tts-') && !id.startsWith('whisper-') && !id.startsWith('dall-e') && !id.startsWith('text-embedding') && id !== 'gpt-4o-mini-tts',
+  // Chat models (now filtered to allowed models only)
+  isChatModel: (id: string) => !id.startsWith('tts-') && !id.startsWith('whisper-') && !id.startsWith('dall-e') && !id.startsWith('text-embedding') && id !== 'gpt-4o-mini-tts' && isAllowedChatModel(id),
 };
 
 // Apply model configuration rules
-function applyModelRules(model: { id: string; [key: string]: unknown }): ModelConfig | null {
+function applyModelRules(model: { id: string }): ModelConfig | null {
   const id = model.id;
   
   if (MODEL_RULES.isChatModel(id)) {
@@ -67,11 +86,13 @@ function formatModelName(id: string): string {
   // Convert model IDs to friendly names
   const nameMap: Record<string, string> = {
     'o3': 'o3',
+    'o3-preview': 'o3 Preview', 
     'o3-mini': 'o3 Mini',
     'o1': 'o1',
     'o1-preview': 'o1 Preview',
     'o1-mini': 'o1 Mini',
     'gpt-4': 'GPT-4',
+    'gpt-4.1': 'GPT-4.1',
     'gpt-4-turbo': 'GPT-4 Turbo',
     'gpt-4o': 'GPT-4o',
     'gpt-4o-mini': 'GPT-4o Mini',
@@ -163,6 +184,17 @@ const FALLBACK_CHAT_MODELS: ModelConfig[] = [
     noTemperature: true
   },
   {
+    id: 'o3-preview',
+    name: 'o3 Preview',
+    provider: 'openai',
+    category: 'chat',
+    description: 'Preview version of o3 reasoning model',
+    maxTokens: 200000,
+    usesCompletionTokens: true,
+    noSystemRole: true,
+    noTemperature: true
+  },
+  {
     id: 'o1',
     name: 'o1',
     provider: 'openai',
@@ -212,14 +244,6 @@ const FALLBACK_CHAT_MODELS: ModelConfig[] = [
     maxTokens: 8192
   },
   {
-    id: 'gpt-4-turbo',
-    name: 'GPT-4 Turbo',
-    provider: 'openai',
-    category: 'chat',
-    description: 'Latest GPT-4 with improved performance and larger context',
-    maxTokens: 128000
-  },
-  {
     id: 'gpt-4o',
     name: 'GPT-4o',
     provider: 'openai',
@@ -234,14 +258,6 @@ const FALLBACK_CHAT_MODELS: ModelConfig[] = [
     category: 'chat',
     description: 'Faster and more affordable version of GPT-4o',
     maxTokens: 128000
-  },
-  {
-    id: 'gpt-3.5-turbo',
-    name: 'GPT-3.5 Turbo',
-    provider: 'openai',
-    category: 'chat',
-    description: 'Fast and cost-effective for most tasks',
-    maxTokens: 16385
   }
 ];
 
