@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Download, Volume2, RotateCcw, Loader2 } from 'lucide-react';
 import type { PodcastScript } from '../types';
-import { generateAudioForSegment, initializeVoiceAssignments, clearAudioCache, combineAudioBuffers } from '../utils/audioGenerator';
+import { 
+  AudioDownloadManager,
+  generateAudioForSegment, 
+  initializeVoiceAssignments, 
+  clearAudioCache,
+  type DownloadProgress,
+  type AudioSegmentResult
+} from '../utils/audioGenerator';
 
 interface AudioPlayerProps {
   script: PodcastScript | null;
@@ -104,7 +111,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
     }
   }, [isPlaying, updateCurrentTime]);
 
-  // Preload all audio segments in parallel
+  // Preload all audio segments using AudioDownloadManager
   const preloadAllSegments = useCallback(async () => {
     if (!script?.segments || audioSegments.length === 0) return;
 
@@ -118,41 +125,55 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
         audioContextRef.current = new AudioContext();
       }
 
-      const loadPromises = script.segments.map(async (segment, index) => {
-        if (audioSegments[index]?.isLoaded) return; // Skip if already loaded
+      const downloadManager = new AudioDownloadManager(script, apiKey, ttsModel);
+
+      // Load segments sequentially using the manager
+      for (let i = 0; i < script.segments.length; i++) {
+        const segment = script.segments[i];
+        
+        if (audioSegments[i]?.isLoaded) continue; // Skip if already loaded
 
         // Update segment state to loading
         setAudioSegments(prev => prev.map(seg => 
-          seg.index === index 
+          seg.index === i 
             ? { ...seg, isLoading: true, error: null }
             : seg
         ));
 
-        try {
-          const arrayBuffer = await generateAudioForSegment(segment, apiKey, ttsModel);
-          const audioBuffer = await audioContextRef.current!.decodeAudioData(arrayBuffer);
-          
-          // Update segment state with loaded buffer
-          setAudioSegments(prev => prev.map(seg => 
-            seg.index === index 
-              ? { ...seg, isLoading: false, isLoaded: true, buffer: audioBuffer }
-              : seg
-          ));
+        const result: AudioSegmentResult = await downloadManager.preloadSegment(segment, i);
 
-          // Update progress
-          setPreloadProgress(prev => prev + (100 / script.segments.length));
-          
-        } catch (err) {
-          console.error(`Failed to load segment ${index}:`, err);
+        if (result.success && result.buffer) {
+          try {
+            const audioBuffer = await audioContextRef.current!.decodeAudioData(result.buffer);
+            
+            // Update segment state with loaded buffer
+            setAudioSegments(prev => prev.map(seg => 
+              seg.index === i 
+                ? { ...seg, isLoading: false, isLoaded: true, buffer: audioBuffer }
+                : seg
+            ));
+
+            // Update progress
+            setPreloadProgress(prev => prev + (100 / script.segments.length));
+            console.log(`✅ Preload segment ${i + 1} completed successfully`);
+          } catch (decodeError) {
+            console.error(`Failed to decode audio for segment ${i + 1}:`, decodeError);
+            setAudioSegments(prev => prev.map(seg => 
+              seg.index === i 
+                ? { ...seg, isLoading: false, error: 'Failed to decode audio' }
+                : seg
+            ));
+          }
+        } else {
+          // Update segment state with error but continue with next segment
           setAudioSegments(prev => prev.map(seg => 
-            seg.index === index 
-              ? { ...seg, isLoading: false, error: 'Failed to load audio' }
+            seg.index === i 
+              ? { ...seg, isLoading: false, error: result.error || 'Unknown error' }
               : seg
           ));
+          console.error(`❌ Preload segment ${i + 1} failed: ${result.error}`);
         }
-      });
-
-      await Promise.all(loadPromises);
+      }
       
     } catch (err) {
       console.error('Preload error:', err);
@@ -291,18 +312,26 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
         throw new Error('Your browser does not support file downloads');
       }
 
-      console.log('Starting enhanced download with progress tracking');
+      console.log('🎵 Starting download with AudioDownloadManager...');
       
-      // Enhanced download with progress tracking
-      await downloadFullPodcastWithProgress(script, apiKey, ttsModel, (progress) => {
-        console.log(`Download progress: ${progress}%`);
-        setDownloadProgress(progress);
-      });
+      // Use new AudioDownloadManager with progress tracking
+      const downloadManager = new AudioDownloadManager(
+        script, 
+        apiKey, 
+        ttsModel,
+        (progress: DownloadProgress) => {
+          const overallProgress = Math.round(progress.overallProgress);
+          console.log(`📊 ${progress.currentOperation}: ${overallProgress}%`);
+          setDownloadProgress(overallProgress);
+        }
+      );
       
-      console.log('Download completed successfully');
+      await downloadManager.downloadAndSave();
+      
+      console.log('✅ Download completed successfully');
       
     } catch (err) {
-      console.error('Download error:', err);
+      console.error('❌ Download error:', err);
       
       // Provide more specific error messages
       let errorMessage = 'Failed to download podcast';
@@ -551,84 +580,6 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
   );
 }
 
-// Enhanced download function with progress tracking
-async function downloadFullPodcastWithProgress(
-  script: PodcastScript, 
-  apiKey: string, 
-  model: string,
-  onProgress: (progress: number) => void
-): Promise<void> {
-  if (!script.segments.length) return;
 
-  console.log('Starting podcast download...');
-
-  try {
-    // Initialize voice assignments if not already done
-    await initializeVoiceAssignments(script);
-    console.log('Voice assignments initialized');
-
-    const audioBuffers: ArrayBuffer[] = [];
-    const totalSegments = script.segments.length;
-
-    console.log(`Generating audio for ${totalSegments} segments`);
-
-    // Generate all audio in parallel with progress tracking
-    const generatePromises = script.segments.map(async (segment, index) => {
-      console.log(`Generating segment ${index + 1}/${totalSegments}`);
-      const buffer = await generateAudioForSegment(segment, apiKey, model);
-      onProgress(((index + 1) / totalSegments) * 80); // 80% for generation
-      console.log(`Completed segment ${index + 1}/${totalSegments}`);
-      return buffer;
-    });
-
-    const results = await Promise.all(generatePromises);
-    audioBuffers.push(...results);
-
-    console.log(`Generated ${audioBuffers.length} audio segments`);
-    onProgress(90); // 90% for combining
-
-    // Combine audio buffers using the imported function from audioGenerator
-    const combinedBuffer = combineAudioBuffers(audioBuffers);
-    console.log(`Combined buffer size: ${combinedBuffer.byteLength} bytes`);
-
-    onProgress(95); // 95% for blob creation
-
-    // Create blob with proper audio format
-    const blob = new Blob([combinedBuffer], { type: 'audio/mpeg' });
-    console.log(`Created blob: ${blob.size} bytes, type: ${blob.type}`);
-
-    onProgress(100); // 100% complete
-
-    // Download with better filename
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-    const filename = `podcast-${timestamp}.mp3`;
-    
-    console.log(`Downloading as: ${filename}`);
-
-    // Create download link
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.style.display = 'none';
-    
-    // Trigger download
-    document.body.appendChild(a);
-    a.click();
-    
-    // Cleanup
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log('Download cleanup completed');
-    }, 100);
-
-    console.log('Download initiated successfully');
-    
-  } catch (error) {
-    console.error('Download error details:', error);
-    throw error;
-  }
-}
 
 export default AudioPlayer;

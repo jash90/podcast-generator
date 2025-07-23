@@ -3,6 +3,14 @@ import { createOpenAIClient } from '../config/api';
 import type { PodcastScript, PodcastSegment, PersonaCollection, PersonaDetail } from '../types';
 import { splitTextForTTS, optimizeTextForTTS, validateTextChunk } from './textSplitter';
 
+// TTS Rate Limiting Configuration
+const TTS_RATE_LIMITING = {
+  ERROR_RETRY_DELAY: 5000,      // 5 seconds delay only on errors
+  RATE_LIMIT_DELAY: 10000,      // 10 seconds for rate limit errors
+  PRELOAD_DELAY: 500,           // 0.5 seconds minimal delay for preload
+  MAX_RETRIES: 3,               // Maximum retry attempts
+} as const;
+
 // Enhanced voice configuration with characteristics
 const VOICE_PROFILES = {
   echo: {
@@ -35,16 +43,16 @@ const VOICE_PROFILES = {
   alloy: {
     gender: 'female' as const,
     characteristics: {
-      tone: ['professional', 'authoritative', 'calm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
-      style: ['formal', 'academic', 'journalistic'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      tone: ['professional', 'friendly', 'calm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      style: ['formal', 'conversational'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
       ageRange: ['30-40', '35-45'],
-      personality: ['intelligent', 'composed', 'trustworthy']
+      personality: ['composed', 'trustworthy', 'reliable']
     }
   },
   nova: {
     gender: 'female' as const,
     characteristics: {
-      tone: ['warm', 'friendly', 'energetic'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
+      tone: ['energetic', 'warm', 'friendly'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
       style: ['conversational', 'casual'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
       ageRange: ['25-35', '30-40'],
       personality: ['vibrant', 'passionate', 'expressive']
@@ -54,18 +62,305 @@ const VOICE_PROFILES = {
     gender: 'female' as const,
     characteristics: {
       tone: ['calm', 'professional', 'warm'] as Array<'warm' | 'authoritative' | 'friendly' | 'professional' | 'energetic' | 'calm'>,
-      style: ['conversational', 'formal'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
+      style: ['formal', 'academic'] as Array<'conversational' | 'formal' | 'casual' | 'academic' | 'journalistic'>,
       ageRange: ['35-45', '40-50'],
-      personality: ['thoughtful', 'mature', 'balanced']
+      personality: ['mature', 'balanced', 'thoughtful']
     }
   }
-} as const;
+};
 
 type VoiceType = keyof typeof VOICE_PROFILES;
 
 const voiceAssignments = new Map<string, VoiceType>();
 // Audio cache using Uint8Array to avoid detached ArrayBuffer issues
 const audioCache = new Map<string, Uint8Array>();
+
+// Progress callback types
+export interface DownloadProgress {
+  segmentIndex: number;
+  totalSegments: number;
+  segmentProgress: number; // 0-100 for current segment
+  overallProgress: number; // 0-100 for entire download
+  currentOperation: string;
+  segmentInfo?: {
+    type: string;
+    textLength: number;
+    chunks: number;
+  };
+}
+
+export interface AudioSegmentResult {
+  success: boolean;
+  buffer?: ArrayBuffer;
+  error?: string;
+  retries: number;
+}
+
+// Unified Audio Download Manager
+export class AudioDownloadManager {
+  private apiKey: string;
+  private model: string;
+  private script: PodcastScript;
+  private onProgress?: (progress: DownloadProgress) => void;
+
+  constructor(
+    script: PodcastScript, 
+    apiKey: string, 
+    model: string = 'tts-1',
+    onProgress?: (progress: DownloadProgress) => void
+  ) {
+    this.script = script;
+    this.apiKey = apiKey;
+    this.model = model;
+    this.onProgress = onProgress;
+  }
+
+  private reportProgress(
+    segmentIndex: number,
+    segmentProgress: number,
+    operation: string,
+    segment?: PodcastSegment
+  ): void {
+    if (!this.onProgress) return;
+
+    const overallProgress = ((segmentIndex + (segmentProgress / 100)) / this.script.segments.length) * 100;
+    
+    this.onProgress({
+      segmentIndex,
+      totalSegments: this.script.segments.length,
+      segmentProgress,
+      overallProgress,
+      currentOperation: operation,
+      segmentInfo: segment ? {
+        type: segment.type,
+        textLength: segment.text.length,
+        chunks: splitTextForTTS(segment.text).length
+      } : undefined
+    });
+  }
+
+  private async retryWithBackoff<T>(
+    operation: () => Promise<T>,
+    context: string,
+    maxRetries: number = TTS_RATE_LIMITING.MAX_RETRIES
+  ): Promise<{ result: T; retries: number }> {
+    let retries = 0;
+    
+    while (retries <= maxRetries) {
+      try {
+        const result = await operation();
+        return { result, retries };
+      } catch (error: unknown) {
+        retries++;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`❌ ${context} failed (attempt ${retries}/${maxRetries + 1}):`, errorMessage);
+        
+        if (retries > maxRetries) {
+          throw new Error(`${context} failed after ${maxRetries + 1} attempts: ${errorMessage}`);
+        }
+        
+        // Determine delay based on error type
+        const hasStatusCode = error && typeof error === 'object' && 'status' in error;
+        const isRateLimit = errorMessage.includes('rate limit') || 
+                           errorMessage.includes('429') ||
+                           (hasStatusCode && (error as { status: number }).status === 429);
+        const delayMs = isRateLimit ? TTS_RATE_LIMITING.RATE_LIMIT_DELAY : TTS_RATE_LIMITING.ERROR_RETRY_DELAY;
+        
+        console.log(`⏳ ${context} - waiting ${delayMs / 1000} seconds before retry...`);
+        await this.delay(delayMs);
+      }
+    }
+    
+    throw new Error(`${context} failed after all retries`);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async generateSegmentAudio(segment: PodcastSegment, segmentIndex: number): Promise<AudioSegmentResult> {
+    try {
+      this.reportProgress(segmentIndex, 0, `Generating audio for ${segment.type}`, segment);
+
+      const result = await this.retryWithBackoff(
+        () => generateAudioForSegment(segment, this.apiKey, this.model),
+        `Segment ${segmentIndex + 1} (${segment.type})`
+      );
+
+      this.reportProgress(segmentIndex, 100, `Completed ${segment.type}`);
+      
+      return {
+        success: true,
+        buffer: result.result,
+        retries: result.retries
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to generate segment ${segmentIndex + 1}:`, errorMessage);
+      
+      return {
+        success: false,
+        error: errorMessage,
+        retries: TTS_RATE_LIMITING.MAX_RETRIES + 1
+      };
+    }
+  }
+
+  async downloadAllSegments(): Promise<{
+    audioBuffers: ArrayBuffer[];
+    failedSegments: number[];
+    totalRetries: number;
+  }> {
+    console.log('🎵 Starting comprehensive audio download...');
+    
+    // Initialize voice assignments if not already done
+    if (voiceAssignments.size === 0) {
+      await initializeVoiceAssignments(this.script);
+      console.log('✅ Voice assignments initialized');
+    }
+
+    if (!this.script.segments.length) {
+      throw new Error('No segments available for download');
+    }
+
+    const audioBuffers: ArrayBuffer[] = [];
+    const failedSegments: number[] = [];
+    let totalRetries = 0;
+
+    console.log(`📊 Processing ${this.script.segments.length} segments...`);
+
+    // Process segments sequentially for rate limiting compliance
+    for (let i = 0; i < this.script.segments.length; i++) {
+      const segment = this.script.segments[i];
+      console.log(`🎙️ Processing segment ${i + 1}/${this.script.segments.length}: ${segment.type} (${segment.text.length} chars)`);
+
+      const result = await this.generateSegmentAudio(segment, i);
+      totalRetries += result.retries;
+
+      if (result.success && result.buffer) {
+        audioBuffers.push(result.buffer);
+        console.log(`✅ Segment ${i + 1} completed successfully`);
+      } else {
+        failedSegments.push(i);
+        console.error(`❌ Segment ${i + 1} failed permanently: ${result.error}`);
+        
+        // Create silent buffer for failed segments to maintain sync
+        const silentBuffer = new ArrayBuffer(1024); // Small silent buffer
+        audioBuffers.push(silentBuffer);
+      }
+    }
+
+    console.log(`📈 Download complete: ${audioBuffers.length - failedSegments.length}/${audioBuffers.length} successful, ${totalRetries} total retries`);
+
+    return {
+      audioBuffers,
+      failedSegments,
+      totalRetries
+    };
+  }
+
+  async downloadAndSave(): Promise<void> {
+    console.log('💾 Starting download and save process...');
+    
+    this.reportProgress(0, 0, 'Initializing download...');
+
+    const { audioBuffers, failedSegments, totalRetries } = await this.downloadAllSegments();
+
+    // Report combining progress
+    this.reportProgress(this.script.segments.length, 0, 'Combining audio segments...');
+
+    // Combine audio buffers
+    const combinedBuffer = combineAudioBuffers(audioBuffers);
+    console.log(`🔗 Combined buffer size: ${combinedBuffer.byteLength} bytes`);
+
+    // Create and download file
+    this.reportProgress(this.script.segments.length, 50, 'Creating download file...');
+    
+    const blob = new Blob([combinedBuffer], { type: 'audio/mpeg' });
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    const filename = `podcast-${timestamp}.mp3`;
+    
+    this.reportProgress(this.script.segments.length, 75, 'Starting download...');
+    
+    // Create download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      console.log('🧹 Download cleanup completed');
+    }, 100);
+
+    this.reportProgress(this.script.segments.length, 100, 'Download complete!');
+
+    if (failedSegments.length > 0) {
+      console.warn(`⚠️ Download completed with ${failedSegments.length} failed segments: ${failedSegments.map(i => i + 1).join(', ')}`);
+    } else {
+      console.log(`🎉 Perfect download! All ${this.script.segments.length} segments generated successfully with ${totalRetries} retries`);
+    }
+
+    console.log(`📁 Downloaded: ${filename} (${Math.round(blob.size / 1024)} KB)`);
+  }
+
+  // Method for preloading segments (used by AudioPlayer)
+  async preloadSegment(segment: PodcastSegment, segmentIndex: number): Promise<AudioSegmentResult> {
+    try {
+      // Use shorter delay for preloading to improve UX
+      const result = await this.retryWithBackoff(
+        async () => {
+          // Small delay for preload to be gentle on the API
+          if (segmentIndex > 0) {
+            await this.delay(TTS_RATE_LIMITING.PRELOAD_DELAY);
+          }
+          return await generateAudioForSegment(segment, this.apiKey, this.model);
+        },
+        `Preload segment ${segmentIndex + 1} (${segment.type})`,
+        2 // Fewer retries for preload
+      );
+
+      return {
+        success: true,
+        buffer: result.result,
+        retries: result.retries
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        error: errorMessage,
+        retries: 2
+      };
+    }
+  }
+}
+
+/**
+ * Add delay between TTS API requests to prevent rate limiting
+ */
+async function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if an ArrayBuffer is detached
+ */
+function isArrayBufferDetached(buffer: ArrayBuffer): boolean {
+  try {
+    // Try to create a view of the buffer - this will throw if detached
+    new Uint8Array(buffer);
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Calculate compatibility score between a persona and voice profile
@@ -204,19 +499,6 @@ function hashString(str: string): string {
 }
 
 /**
- * Check if an ArrayBuffer is detached
- */
-function isArrayBufferDetached(buffer: ArrayBuffer): boolean {
-  try {
-    // Try to create a view of the buffer - this will throw if detached
-    new Uint8Array(buffer);
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-/**
  * Generate audio for a single text chunk with enhanced error handling
  */
 async function generateAudioChunk(
@@ -301,6 +583,7 @@ export async function generateAudioForSegment(
     // Create a fresh ArrayBuffer from the cached Uint8Array
     const freshBuffer = new ArrayBuffer(cachedData.length);
     new Uint8Array(freshBuffer).set(cachedData);
+    console.log(`📋 Using cached audio for segment: ${segment.type} (${cachedData.length} bytes)`);
     return freshBuffer;
   }
 
@@ -317,7 +600,7 @@ export async function generateAudioForSegment(
   // Split text into chunks if needed
   const textChunks = splitTextForTTS(optimizedText);
   
-  console.log(`Generating audio for segment with ${textChunks.length} chunk(s)`);
+  console.log(`Generating audio for ${segment.type} with ${textChunks.length} chunk(s)`);
   
   try {
     if (textChunks.length === 1) {
@@ -327,15 +610,42 @@ export async function generateAudioForSegment(
       audioCache.set(cacheKey, new Uint8Array(audioBuffer));
       return audioBuffer;
     } else {
-      // Multiple chunks - generate in parallel and combine
+      // Multiple chunks - generate sequentially with error-based delays
       console.log(`Splitting long text (${optimizedText.length} chars) into ${textChunks.length} chunks`);
       
-      const chunkPromises = textChunks.map((chunk, index) => {
-        console.log(`Chunk ${index + 1}: ${chunk.length} characters`);
-        return generateAudioChunk(chunk, voice, model, apiKey);
-      });
+      const audioChunks: ArrayBuffer[] = [];
+      
+      for (let i = 0; i < textChunks.length; i++) {
+        const chunk = textChunks[i];
+        console.log(`Chunk ${i + 1}/${textChunks.length}: ${chunk.length} characters`);
+        
+        let retries = 0;
+        while (retries <= TTS_RATE_LIMITING.MAX_RETRIES) {
+          try {
+            const audioBuffer = await generateAudioChunk(chunk, voice, model, apiKey);
+            audioChunks.push(audioBuffer);
+            console.log(`✅ Chunk ${i + 1} completed successfully`);
+            break; // Success - proceed to next chunk immediately
+          } catch (error: unknown) {
+            retries++;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`❌ Chunk ${i + 1} failed (attempt ${retries}/${TTS_RATE_LIMITING.MAX_RETRIES + 1}):`, errorMessage);
+            
+            if (retries > TTS_RATE_LIMITING.MAX_RETRIES) {
+              throw error; // Max retries exceeded
+            }
+            
+            // Determine delay based on error type
+            const hasStatusCode = error && typeof error === 'object' && 'status' in error;
+            const isRateLimit = errorMessage.includes('rate limit') || (hasStatusCode && (error as { status: number }).status === 429);
+            const delayMs = isRateLimit ? TTS_RATE_LIMITING.RATE_LIMIT_DELAY : TTS_RATE_LIMITING.ERROR_RETRY_DELAY;
+            
+            console.log(`⏳ Waiting ${delayMs / 1000} seconds before retry...`);
+            await delay(delayMs);
+          }
+        }
+      }
 
-      const audioChunks = await Promise.all(chunkPromises);
       const combinedBuffer = combineAudioBuffers(audioChunks);
       
       // Cache as Uint8Array to prevent detachment issues
@@ -344,7 +654,7 @@ export async function generateAudioForSegment(
     }
   } catch (error) {
     console.error('Audio generation error:', error);
-    throw new Error(`Failed to generate audio: ${error}`);
+    throw new Error(`Failed to generate audio for ${segment.type}: ${error}`);
   }
 }
 
@@ -375,86 +685,28 @@ export async function initializeVoiceAssignments(script: PodcastScript): Promise
   });
 }
 
+// Legacy function for backward compatibility - now uses AudioDownloadManager
 export async function downloadFullPodcast(script: PodcastScript, apiKey: string, model: string = 'tts-1'): Promise<void> {
-  try {
-    console.log('Starting full podcast download...');
-    
-    // Initialize voice assignments if not already done
-    if (voiceAssignments.size === 0) {
-      await initializeVoiceAssignments(script);
-      console.log('Voice assignments initialized');
-    }
-
-    if (!script.segments.length) {
-      throw new Error('No segments available for download');
-    }
-
-    console.log(`Generating audio for ${script.segments.length} segments`);
-
-    // Generate all audio segments in parallel for better performance
-    const generatePromises = script.segments.map((segment, index) => {
-      console.log(`Starting generation for segment ${index + 1}`);
-      return generateAudioForSegment(segment, apiKey, model);
-    });
-
-    const audioBuffers = await Promise.all(generatePromises);
-    console.log(`Generated ${audioBuffers.length} audio segments`);
-
-    // Combine audio buffers
-    const combinedBuffer = combineAudioBuffers(audioBuffers);
-    console.log(`Combined buffer size: ${combinedBuffer.byteLength} bytes`);
-
-    // Create blob with proper MIME type
-    const blob = new Blob([combinedBuffer], { type: 'audio/mpeg' });
-    console.log(`Created blob: ${blob.size} bytes`);
-
-    // Create download with timestamp
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-    const filename = `podcast-${timestamp}.mp3`;
-    
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.style.display = 'none';
-    
-    document.body.appendChild(a);
-    a.click();
-    
-    // Cleanup after a short delay
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log('Download cleanup completed');
-    }, 100);
-    
-    console.log(`Download initiated: ${filename}`);
-    
-  } catch (error) {
-    console.error('Download failed:', error);
-    throw new Error(`Download failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
+  console.warn('🚨 downloadFullPodcast is deprecated. Use AudioDownloadManager instead.');
+  
+  const downloadManager = new AudioDownloadManager(script, apiKey, model);
+  await downloadManager.downloadAndSave();
 }
 
 export function clearAudioCache(): void {
   audioCache.clear();
+  console.log('🧹 Audio cache cleared');
 }
 
-/**
- * Get cache statistics for debugging
- */
-export function getCacheStats(): {
-  totalEntries: number;
-  totalSizeBytes: number;
-  averageSizeBytes: number;
-} {
-  const entries = Array.from(audioCache.values());
-  const totalSizeBytes = entries.reduce((acc, buffer) => acc + buffer.length, 0);
+export function getCacheStats(): { totalEntries: number; totalSizeBytes: number } {
+  let totalSizeBytes = 0;
+  for (const entry of audioCache.values()) {
+    totalSizeBytes += entry.length;
+  }
   
   return {
     totalEntries: audioCache.size,
-    totalSizeBytes,
-    averageSizeBytes: entries.length > 0 ? totalSizeBytes / entries.length : 0
+    totalSizeBytes
   };
 }
 
