@@ -4,6 +4,7 @@ import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 export type GenerationStage = 
   | 'detecting-language'
   | 'creating-personas'
+  | 'generating-topics'
   | 'writing-script'
   | 'initializing-voices'
   | 'complete'
@@ -17,6 +18,7 @@ function GenerationProgress({ currentStage }: GenerationProgressProps) {
   const stages = [
     { id: 'detecting-language', label: 'Detecting Language' },
     { id: 'creating-personas', label: 'Creating Personas' },
+    { id: 'generating-topics', label: 'Generating Discussion Topics' },
     { id: 'writing-script', label: 'Writing Script' },
     { id: 'initializing-voices', label: 'Initializing Voices' },
   ];

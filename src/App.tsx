@@ -7,6 +7,7 @@ import AudioPlayer from './components/AudioPlayer';
 import GenerationProgress, { GenerationStage } from './components/GenerationProgress';
 import ModelSelector from './components/ModelSelector';
 import TextStats from './components/TextStats';
+import TopicsDisplay from './components/TopicsDisplay';
 import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
 import { DEFAULT_MODELS, fetchModelsFromAPI, updateModels } from './config/models';
@@ -169,15 +170,20 @@ function App() {
 
         {script && (
           <div className="space-y-6">
-            <AudioPlayer 
-              script={script} 
-              isPlaying={isPlaying} 
-              setIsPlaying={setIsPlaying} 
+            {script.topics && (
+              <TopicsDisplay topics={script.topics} />
+            )}
+            
+            <AudioPlayer
+              script={script}
+              isPlaying={isPlaying}
+              setIsPlaying={setIsPlaying}
               apiKey={apiKey}
               ttsModel={models.textToSpeech}
             />
-            <TextStats script={script} />
+            
             <Script script={script} />
+            <TextStats script={script} />
           </div>
         )}
       </div>

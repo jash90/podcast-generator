@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { createOpenAIClient } from '../config/api';
-import type { PodcastScript, PodcastSegment, PersonaCollection } from '../types';
+import type { PodcastScript, PodcastSegment, PersonaCollection, PodcastTopics } from '../types';
 import { detectLanguage } from './languageDetector';
 import type { GenerationStage } from '../components/GenerationProgress';
 import type { ProjectModels } from '../config/models';
@@ -60,78 +60,156 @@ Requirements:
 - Must have distinct viewpoint and expertise that adds value to the discussion
 `;
 
+const TOPICS_GENERATION_PROMPT = (topic: string, language: string, personas: string) => `
+Create a comprehensive structure of discussion topics and questions for a podcast about "${topic}" in ${language}.
+
+Use these personas for context:
+${personas}
+
+Return ONLY a JSON object with the following structure (no additional text or formatting):
+
+{
+  "mainTopic": "${topic}",
+  "subtopics": [
+    {
+      "title": "Topic title",
+      "description": "Brief description of what this topic covers",
+      "perspective": "neutral" | "controversial" | "analytical",
+      "targetGuest": "guest1" | "guest2" | "both",
+      "hostQuestions": [
+        "Question 1 that the host will ask",
+        "Question 2 that the host will ask",
+        "Question 3 that the host will ask"
+      ],
+      "followUpQuestions": [
+        "Follow-up question 1",
+        "Follow-up question 2"
+      ]
+    }
+  ],
+  "openingQuestions": [
+    "Opening question 1 for introduction",
+    "Opening question 2 for setting context"
+  ],
+  "closingQuestions": [
+    "Closing question 1 for final thoughts",
+    "Closing question 2 for wrap-up"
+  ]
+}
+
+Requirements:
+- Generate 4-6 subtopics that comprehensively cover different aspects of "${topic}"
+- Each subtopic should have 3-5 host questions and 2-3 follow-up questions
+- Questions should be engaging, thought-provoking, and appropriate for the expertise of each guest
+- Mix neutral, controversial, and analytical perspectives across subtopics
+- Target specific guests based on their expertise and viewpoints
+- Ensure questions flow naturally and build upon each other
+- Include 2-3 opening questions and 2-3 closing questions
+- All questions should be in ${language}
+`;
+
 const SECTION_PROMPTS = {
-  opening: (topic: string, language: string, personas: string) => `
-Create the opening section of a podcast about "${topic}" in ${language} using these personas:
+  opening: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
+Create the opening section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
 
 ${personas}
 
+Opening Questions to Use:
+${topics.openingQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
 The opening should include:
 - Host introduces the show and topic
-- Host introduces guests
+- Host introduces guests with their expertise
 - Each guest briefly introduces themselves
+- Host asks 1-2 opening questions to set the stage
 
 Return ONLY a JSON array with the following format:
 [
   {"type": "host", "text": "Welcome to the show..."},
   {"type": "guest1", "text": "Thank you for having me..."},
-  {"type": "guest2", "text": "Glad to be here..."}
+  {"type": "guest2", "text": "Glad to be here..."},
+  {"type": "host", "text": "Opening question..."}
 ]
 `,
 
-  background: (topic: string, language: string, personas: string) => `
-Create the background section of a podcast about "${topic}" in ${language} using these personas:
+  background: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
+Create the background section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
 
 ${personas}
 
+Background Topics to Cover:
+${topics.subtopics.filter(t => t.perspective === 'neutral').map((subtopic, i) => `
+${i + 1}. ${subtopic.title}: ${subtopic.description}
+Host Questions: ${subtopic.hostQuestions.slice(0, 2).join(' / ')}
+`).join('\n')}
+
 The background should include:
-- Host provides historical context
-- Host highlights key developments
-- Host explains current relevance
-- Guests add contextual insights
+- Host provides historical context using the questions above
+- Host asks specific questions about background and development
+- Guests provide expert insights and context
+- Natural flow between questions and responses
 
 Return ONLY a JSON array with the following format:
 [
-  {"type": "host", "text": "Let's discuss the background..."},
+  {"type": "host", "text": "Let's start with the background..."},
   {"type": "guest1", "text": "From my perspective..."},
   {"type": "guest2", "text": "Adding to that..."}
 ]
 `,
 
-  discussion: (topic: string, language: string, personas: string) => `
-Create the main discussion section of a podcast about "${topic}" in ${language} using these personas:
+  discussion: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
+Create the main discussion section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
 
 ${personas}
 
+Main Discussion Topics and Questions:
+${topics.subtopics.map((subtopic, i) => `
+${i + 1}. ${subtopic.title} (${subtopic.perspective})
+   Description: ${subtopic.description}
+   Target: ${subtopic.targetGuest || 'both'}
+   Host Questions:
+   ${subtopic.hostQuestions.map((q) => `   - ${q}`).join('\n')}
+   Follow-ups:
+   ${subtopic.followUpQuestions.map((q) => `   - ${q}`).join('\n')}
+`).join('\n')}
+
 The discussion should include:
-- Structured debate between guests
-- Each guest presents their main arguments
-- Host moderates and asks follow-up questions
+- Host asks the prepared questions in a natural conversational flow
+- Each guest responds based on their expertise and perspective
+- Host uses follow-up questions to dig deeper
 - Guests respond to each other's points
+- Host moderates and guides the conversation between topics
+
+Create a dynamic conversation that uses these questions naturally. Don't make it feel like a rigid Q&A.
 
 Return ONLY a JSON array with the following format:
 [
-  {"type": "host", "text": "Let's dive deeper..."},
-  {"type": "guest1", "text": "My main point is..."},
+  {"type": "host", "text": "Let's dive into the first major topic..."},
+  {"type": "guest1", "text": "My perspective on this is..."},
   {"type": "guest2", "text": "I see it differently..."}
 ]
 `,
 
-  conclusion: (topic: string, language: string, personas: string) => `
-Create the conclusion section of a podcast about "${topic}" in ${language} using these personas:
+  conclusion: (topic: string, language: string, personas: string, topics: PodcastTopics) => `
+Create the conclusion section of a podcast about "${topic}" in ${language} using these personas and discussion structure:
 
 ${personas}
 
+Closing Questions to Use:
+${topics.closingQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
 The conclusion should include:
-- Host summarizes key points
-- Final thoughts from guests
-- Host closes the show
+- Host asks closing questions to get final thoughts
+- Host summarizes key points from the discussion
+- Each guest provides final insights and takeaways
+- Host closes the show professionally
 
 Return ONLY a JSON array with the following format:
 [
-  {"type": "host", "text": "To wrap up..."},
-  {"type": "guest1", "text": "Final thoughts..."},
-  {"type": "guest2", "text": "In conclusion..."}
+  {"type": "host", "text": "As we wrap up, let me ask..."},
+  {"type": "guest1", "text": "My final thought is..."},
+  {"type": "guest2", "text": "In conclusion..."},
+  {"type": "host", "text": "Thank you both for this fascinating discussion..."}
 ]
 `
 };
@@ -282,6 +360,92 @@ async function generateGuestPersona(topic: string, language: string, guestType: 
   }
 }
 
+async function generateDiscussionTopics(
+  topic: string,
+  language: string,
+  personas: PersonaCollection,
+  apiKey: string,
+  model: string
+): Promise<PodcastTopics> {
+  const openai = createOpenAIClient(apiKey);
+  const modelConfig = getModelById(model);
+  
+  const systemInstructions = `You are an expert podcast producer who creates engaging discussion structures. You understand how to create compelling questions that draw out expertise and create natural dialogue. Return ONLY valid JSON with no additional text or formatting.`;
+  const userPrompt = TOPICS_GENERATION_PROMPT(topic, language, personasToText(personas));
+  
+  // Build the request parameters
+  let baseParams: any;
+  
+  if (modelConfig?.noSystemRole) {
+    // For o1/o3 models that don't support system role, incorporate instructions into user message
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "user" as const,
+          content: `${systemInstructions}\n\n${userPrompt}`
+        }
+      ],
+    };
+  } else {
+    // For regular models that support system role
+    baseParams = {
+      model,
+      messages: [
+        {
+          role: "system" as const,
+          content: systemInstructions
+        },
+        {
+          role: "user" as const,
+          content: userPrompt
+        }
+      ],
+    };
+  }
+
+  // Add temperature only if model supports it
+  if (!modelConfig?.noTemperature) {
+    baseParams.temperature = 0.8; // Slightly higher for creative topic generation
+  }
+
+  // Use appropriate token parameter based on model type
+  const requestParams = modelConfig?.usesCompletionTokens 
+    ? { ...baseParams, max_completion_tokens: 4000 }
+    : { ...baseParams, max_tokens: 4000 };
+  
+  const completion = await openai.chat.completions.create(requestParams);
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('Failed to generate discussion topics');
+  }
+
+  try {
+    // Clean the response to extract JSON
+    let cleanContent = content.trim();
+    if (cleanContent.startsWith('```json')) {
+      cleanContent = cleanContent.replace(/```json\s*/, '').replace(/```\s*$/, '');
+    } else if (cleanContent.startsWith('```')) {
+      cleanContent = cleanContent.replace(/```\s*/, '').replace(/```\s*$/, '');
+    }
+
+    const topics = JSON.parse(cleanContent) as PodcastTopics;
+    
+    // Validate the structure
+    if (!topics.mainTopic || !Array.isArray(topics.subtopics) || !Array.isArray(topics.openingQuestions) || !Array.isArray(topics.closingQuestions)) {
+      throw new Error('Invalid topics structure');
+    }
+
+    console.log(`Generated ${topics.subtopics.length} discussion topics with questions`);
+    return topics;
+  } catch (parseError) {
+    console.error('Error parsing topics JSON:', parseError);
+    console.error('Raw content:', content);
+    throw new Error('Failed to parse discussion topics JSON response');
+  }
+}
+
 function parsePersonaGenders(personas: PersonaCollection): Record<string, boolean> {
   return {
     'host': personas.host.gender === 'male',
@@ -320,15 +484,16 @@ async function generateSection(
   section: keyof typeof SECTION_PROMPTS,
   topic: string,
   language: string,
-  personas: string,
+  personas: PersonaCollection,
+  topics: PodcastTopics,
   apiKey: string,
   model: string
 ): Promise<PodcastSegment[]> {
   const openai = createOpenAIClient(apiKey);
   const modelConfig = getModelById(model);
   
-  const systemInstructions = `You are an expert podcast script writer who creates engaging, natural-flowing discussions in ${language}. Return ONLY the JSON array as specified, with no additional text or formatting.`;
-  const userPrompt = SECTION_PROMPTS[section](topic, language, personas);
+  const systemInstructions = `You are an expert podcast script writer who creates engaging, natural-flowing discussions in ${language}. Use the provided questions and topics to create realistic dialogue that doesn't sound scripted. Return ONLY the JSON array as specified, with no additional text or formatting.`;
+  const userPrompt = SECTION_PROMPTS[section](topic, language, personasToText(personas), topics);
   
   // Build the request parameters
   let baseParams: any;
@@ -373,24 +538,26 @@ async function generateSection(
   
   const completion = await openai.chat.completions.create(requestParams);
 
-  let scriptText = completion.choices[0]?.message?.content;
+  const scriptText = completion.choices[0]?.message?.content;
   if (!scriptText) {
     throw new Error(`Failed to generate ${section} section`);
   }
 
+  // Clean and parse the JSON response
   try {
-    // Clean up potential markdown formatting
-    scriptText = scriptText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const segments = JSON.parse(scriptText);
-    
-    if (!Array.isArray(segments)) {
-      throw new Error(`Invalid ${section} section format`);
+    let cleanScriptText = scriptText.trim();
+    if (cleanScriptText.startsWith('```json')) {
+      cleanScriptText = cleanScriptText.replace(/```json\s*/, '').replace(/```\s*$/, '');
+    } else if (cleanScriptText.startsWith('```')) {
+      cleanScriptText = cleanScriptText.replace(/```\s*/, '').replace(/```\s*$/, '');
     }
 
+    const segments = JSON.parse(cleanScriptText) as PodcastSegment[];
     return segments;
   } catch (parseError) {
-    console.error(`Error parsing ${section} section:`, parseError);
-    throw new Error(`Failed to parse ${section} section JSON`);
+    console.error(`Error parsing ${section} section JSON:`, parseError);
+    console.error('Raw content:', scriptText);
+    throw new Error(`Failed to parse ${section} section JSON response`);
   }
 }
 
@@ -416,12 +583,15 @@ export async function generatePodcastScript(
     };
     const personaGenders = parsePersonaGenders(personas);
 
+    setGenerationStage('generating-topics');
+    const topics = await generateDiscussionTopics(topic, language, personas, apiKey, models.scriptGeneration);
+
     setGenerationStage('writing-script');
     const sections = await Promise.all([
-      generateSection('opening', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
-      generateSection('background', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
-      generateSection('discussion', topic, language, personasToText(personas), apiKey, models.scriptGeneration),
-      generateSection('conclusion', topic, language, personasToText(personas), apiKey, models.scriptGeneration)
+      generateSection('opening', topic, language, personas, topics, apiKey, models.scriptGeneration),
+      generateSection('background', topic, language, personas, topics, apiKey, models.scriptGeneration),
+      generateSection('discussion', topic, language, personas, topics, apiKey, models.scriptGeneration),
+      generateSection('conclusion', topic, language, personas, topics, apiKey, models.scriptGeneration)
     ]);
 
     const segments = sections.flat();
@@ -431,7 +601,8 @@ export async function generatePodcastScript(
       segments, 
       language, 
       personaGenders,
-      personas
+      personas,
+      topics
     };
   } catch (error: any) {
     if (error.response?.status === 401) {

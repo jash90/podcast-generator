@@ -24,9 +24,26 @@ export interface PersonaCollection {
   guest2: PersonaDetail;
 }
 
+export interface DiscussionTopic {
+  title: string;
+  description: string;
+  perspective: 'neutral' | 'controversial' | 'analytical';
+  targetGuest?: 'guest1' | 'guest2' | 'both';
+  hostQuestions: string[];
+  followUpQuestions: string[];
+}
+
+export interface PodcastTopics {
+  mainTopic: string;
+  subtopics: DiscussionTopic[];
+  openingQuestions: string[];
+  closingQuestions: string[];
+}
+
 export interface PodcastScript {
   segments: PodcastSegment[];
   language?: string;
   personaGenders?: Record<string, boolean>; // Keep for backward compatibility
   personas?: PersonaCollection; // New detailed persona information
+  topics?: PodcastTopics; // New structured topics and questions
 }
