@@ -252,4 +252,257 @@ try {
 - Implement proper CORS handling for API requests
 - Use environment variables for sensitive configuration
 
+## Advanced AI Assistant Guidelines
+
+### Code Generation Preferences
+- Always generate complete, working code snippets
+- Include proper TypeScript types and error handling
+- Follow the established patterns from existing codebase
+- Prioritize readability and maintainability over clever solutions
+- Include helpful comments for complex logic
+
+### Project Context Awareness
+- Understand this is a podcast generator with TTS functionality
+- Sequential processing is a hard requirement, not a suggestion
+- Audio quality and download reliability are critical features
+- UI should be intuitive for non-technical users
+- Performance matters due to large audio file processing
+
+### File Modification Guidelines
+- When editing existing files, maintain the established code style
+- Always preserve existing functionality unless explicitly asked to change it
+- Add comprehensive error handling to new features
+- Include progress indicators for long-running operations
+- Test edge cases (empty inputs, API failures, network issues)
+
+### Git & Version Control Guidelines
+- **NEVER commit changes automatically** - Let the user control when commits happen
+- Do not run `git add`, `git commit`, or `git push` commands unless explicitly requested
+- Focus on making the changes and let the user review before committing
+- If the user asks to "save" or "apply" changes, only modify files - do not commit
+- Only suggest git commands if the user specifically asks about version control
+
+### Architecture Decision Making
+- Favor simple, proven solutions over complex new approaches
+- Consider the git history lessons learned (sequential vs parallel)
+- Prioritize user experience and reliability
+- Maintain backward compatibility when possible
+- Document any architectural changes or decisions
+
+### Problem-Solving Approach
+1. **Understand the Context**: This is a TTS podcast generator with specific constraints
+2. **Check Git History**: Learn from past implementation decisions
+3. **Follow Sequential Patterns**: Never use parallel processing for TTS
+4. **Implement Simply**: Avoid over-engineering solutions
+5. **Test Thoroughly**: Validate across different scenarios and browsers
+6. **Document Changes**: Explain the reasoning behind modifications
+
+### Common Project Scenarios
+
+#### Adding New Features
+```typescript
+// ✅ Good pattern for new features
+export function newFeature(input: InputType): OutputType {
+  // 1. Validate inputs early
+  if (!input || !input.requiredField) {
+    throw new Error('Invalid input provided');
+  }
+
+  // 2. Simple, clear logic
+  try {
+    const result = processInput(input);
+    return result;
+  } catch (error) {
+    console.error('Feature failed:', error);
+    throw error; // Fail fast
+  }
+}
+```
+
+#### Debugging Audio Issues
+```typescript
+// ✅ Good debugging approach
+console.log('🎵 Starting audio generation for:', segment.type);
+console.log('📊 Segment length:', segment.text.length);
+console.log('🔧 Using voice:', voice);
+
+try {
+  const buffer = await generateAudio(segment);
+  console.log('✅ Generated:', buffer.byteLength, 'bytes');
+} catch (error) {
+  console.error('❌ Audio generation failed:', {
+    segment: segment.type,
+    textLength: segment.text.length,
+    error: error.message
+  });
+}
+```
+
+#### API Integration Patterns
+```typescript
+// ✅ Good API pattern
+async function callOpenAI(prompt: string, apiKey: string) {
+  if (!apiKey || !apiKey.startsWith('sk-')) {
+    throw new Error('Invalid OpenAI API key');
+  }
+
+  try {
+    const client = createOpenAIClient(apiKey);
+    const response = await client.chat.completions.create({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: prompt }],
+    });
+    
+    return response.choices[0]?.message?.content || '';
+  } catch (error) {
+    if (error.status === 429) {
+      throw new Error('Rate limit exceeded. Please wait before retrying.');
+    }
+    if (error.status === 401) {
+      throw new Error('Invalid API key. Please check your OpenAI credentials.');
+    }
+    throw error;
+  }
+}
+```
+
+### React Component Patterns
+
+#### Proper Hook Usage
+```typescript
+// ✅ Good hook patterns
+function AudioPlayerComponent({ script, apiKey }: Props) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentSegment, setCurrentSegment] = useState(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  // Proper cleanup
+  useEffect(() => {
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  // Memoized callbacks
+  const handlePlay = useCallback(async () => {
+    if (!script) return;
+    
+    try {
+      await playSegment(currentSegment);
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Playback failed:', error);
+      setIsPlaying(false);
+    }
+  }, [script, currentSegment]);
+
+  return (
+    <div className="audio-player">
+      {/* Component JSX */}
+    </div>
+  );
+}
+```
+
+#### Error Boundary Pattern
+```typescript
+// ✅ Good error boundary usage
+function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary
+      fallback={<ErrorFallback />}
+      onError={(error, errorInfo) => {
+        console.error('App error:', error, errorInfo);
+      }}
+    >
+      <App />
+    </ErrorBoundary>
+  );
+}
+```
+
+### State Management Guidelines
+
+#### Local State Patterns
+```typescript
+// ✅ Good state management
+function PodcastGenerator() {
+  const [script, setScript] = useState<PodcastScript | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generateScript = useCallback(async (topic: string) => {
+    setIsGenerating(true);
+    setError(null);
+
+    try {
+      const newScript = await scriptGenerator.generate(topic);
+      setScript(newScript);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Generation failed';
+      setError(errorMessage);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, []);
+
+  return {
+    script,
+    isGenerating,
+    error,
+    generateScript
+  };
+}
+```
+
+### Performance Optimization Rules
+
+#### Memory Management
+```typescript
+// ✅ Good memory management
+function useAudioBuffer() {
+  const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
+
+  const loadBuffer = useCallback(async (segment: PodcastSegment) => {
+    try {
+      const newBuffer = await generateAudioForSegment(segment);
+      setBuffer(newBuffer);
+    } catch (error) {
+      console.error('Buffer loading failed:', error);
+      setBuffer(null);
+    }
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (buffer) {
+        // Buffer cleanup if needed
+        setBuffer(null);
+      }
+    };
+  }, [buffer]);
+
+  return { buffer, loadBuffer };
+}
+```
+
+#### Bundle Size Optimization
+```typescript
+// ✅ Good lazy loading
+const AudioPlayer = lazy(() => import('./components/AudioPlayer'));
+const Script = lazy(() => import('./components/Script'));
+
+function App() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <AudioPlayer />
+      <Script />
+    </Suspense>
+  );
+}
+```
+
 Remember: **Simplicity and reliability over complexity**. The original sequential approach works better than over-engineered parallel processing for TTS APIs. 
