@@ -64,7 +64,8 @@ const VOICE_PROFILES = {
 type VoiceType = keyof typeof VOICE_PROFILES;
 
 const voiceAssignments = new Map<string, VoiceType>();
-const audioCache = new Map<string, ArrayBuffer>();
+// Audio cache using Uint8Array to avoid detached ArrayBuffer issues
+const audioCache = new Map<string, Uint8Array>();
 
 /**
  * Calculate compatibility score between a persona and voice profile
@@ -203,7 +204,20 @@ function hashString(str: string): string {
 }
 
 /**
- * Generate audio for a single text chunk
+ * Check if an ArrayBuffer is detached
+ */
+function isArrayBufferDetached(buffer: ArrayBuffer): boolean {
+  try {
+    // Try to create a view of the buffer - this will throw if detached
+    new Uint8Array(buffer);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Generate audio for a single text chunk with enhanced error handling
  */
 async function generateAudioChunk(
   text: string,
@@ -213,25 +227,53 @@ async function generateAudioChunk(
 ): Promise<ArrayBuffer> {
   const openai = createOpenAIClient(apiKey);
   
-  const response = await openai.audio.speech.create({
-    model,
-    voice,
-    input: text,
-  });
+  try {
+    const response = await openai.audio.speech.create({
+      model,
+      voice,
+      input: text,
+    });
 
-  return await response.arrayBuffer();
+    const arrayBuffer = await response.arrayBuffer();
+    
+    // Verify the buffer is valid
+    if (isArrayBufferDetached(arrayBuffer)) {
+      throw new Error('Generated ArrayBuffer is detached');
+    }
+    
+    if (arrayBuffer.byteLength === 0) {
+      throw new Error('Generated audio buffer is empty');
+    }
+
+    console.log(`Generated audio chunk: ${arrayBuffer.byteLength} bytes for ${text.length} characters`);
+    return arrayBuffer;
+    
+  } catch (error) {
+    console.error('Audio chunk generation failed:', {
+      textLength: text.length,
+      voice,
+      model,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
 }
 
 /**
  * Combine multiple audio buffers into a single buffer
+ * Always creates fresh ArrayBuffers to prevent detachment issues
  */
-function combineAudioBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
+export function combineAudioBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
   if (buffers.length === 0) {
     return new ArrayBuffer(0);
   }
   
   if (buffers.length === 1) {
-    return buffers[0];
+    // Always create a fresh copy to prevent detachment issues
+    const originalBuffer = buffers[0];
+    const freshBuffer = new ArrayBuffer(originalBuffer.byteLength);
+    new Uint8Array(freshBuffer).set(new Uint8Array(originalBuffer));
+    return freshBuffer;
   }
 
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.byteLength, 0);
@@ -253,9 +295,13 @@ export async function generateAudioForSegment(
 ): Promise<ArrayBuffer> {
   const cacheKey = getCacheKey(segment, model);
   
-  // Check cache first
+  // Check cache first and create fresh ArrayBuffer from cached data
   if (audioCache.has(cacheKey)) {
-    return audioCache.get(cacheKey)!;
+    const cachedData = audioCache.get(cacheKey)!;
+    // Create a fresh ArrayBuffer from the cached Uint8Array
+    const freshBuffer = new ArrayBuffer(cachedData.length);
+    new Uint8Array(freshBuffer).set(cachedData);
+    return freshBuffer;
   }
 
   const voice: VoiceType = voiceAssignments.get(segment.type) || 'onyx';
@@ -277,7 +323,8 @@ export async function generateAudioForSegment(
     if (textChunks.length === 1) {
       // Single chunk - direct generation
       const audioBuffer = await generateAudioChunk(textChunks[0], voice, model, apiKey);
-      audioCache.set(cacheKey, audioBuffer);
+      // Cache as Uint8Array to prevent detachment issues
+      audioCache.set(cacheKey, new Uint8Array(audioBuffer));
       return audioBuffer;
     } else {
       // Multiple chunks - generate in parallel and combine
@@ -291,7 +338,8 @@ export async function generateAudioForSegment(
       const audioChunks = await Promise.all(chunkPromises);
       const combinedBuffer = combineAudioBuffers(audioChunks);
       
-      audioCache.set(cacheKey, combinedBuffer);
+      // Cache as Uint8Array to prevent detachment issues
+      audioCache.set(cacheKey, new Uint8Array(combinedBuffer));
       return combinedBuffer;
     }
   } catch (error) {
@@ -401,7 +449,7 @@ export function getCacheStats(): {
   averageSizeBytes: number;
 } {
   const entries = Array.from(audioCache.values());
-  const totalSizeBytes = entries.reduce((acc, buffer) => acc + buffer.byteLength, 0);
+  const totalSizeBytes = entries.reduce((acc, buffer) => acc + buffer.length, 0);
   
   return {
     totalEntries: audioCache.size,
@@ -474,4 +522,68 @@ export function testDownloadSupport(): boolean {
     console.error('Download support test failed:', error);
     return false;
   }
+}
+
+/**
+ * Enhanced diagnostic information for troubleshooting
+ */
+export function diagnoseDownloadIssue(script: PodcastScript): {
+  canDownload: boolean;
+  issues: string[];
+  recommendations: string[];
+} {
+  const issues: string[] = [];
+  const recommendations: string[] = [];
+
+  // Check script validity
+  if (!script) {
+    issues.push('No script provided');
+    recommendations.push('Generate a podcast script first');
+  } else if (!script.segments || script.segments.length === 0) {
+    issues.push('Script has no segments');
+    recommendations.push('Regenerate the podcast script');
+  }
+
+  // Check browser support
+  if (typeof ArrayBuffer === 'undefined') {
+    issues.push('Browser does not support ArrayBuffer');
+    recommendations.push('Use a modern browser');
+  }
+
+  if (typeof Blob === 'undefined') {
+    issues.push('Browser does not support Blob');
+    recommendations.push('Use a modern browser');
+  }
+
+  if (typeof URL.createObjectURL === 'undefined') {
+    issues.push('Browser does not support URL.createObjectURL');
+    recommendations.push('Use a modern browser that supports file downloads');
+  }
+
+  // Check download support
+  const testElement = document.createElement('a');
+  if (typeof testElement.download === 'undefined') {
+    issues.push('Browser does not support download attribute');
+    recommendations.push('Use a modern browser or right-click and "Save As"');
+  }
+
+  // Check cache state
+  const cacheStats = getCacheStats();
+  if (cacheStats.totalEntries > 0) {
+    console.log(`Cache contains ${cacheStats.totalEntries} entries (${Math.round(cacheStats.totalSizeBytes / 1024)} KB)`);
+  }
+
+  // Check voice assignments
+  if (voiceAssignments.size === 0) {
+    issues.push('Voice assignments not initialized');
+    recommendations.push('Wait for voice initialization to complete');
+  }
+
+  const canDownload = issues.length === 0;
+
+  return {
+    canDownload,
+    issues,
+    recommendations
+  };
 }

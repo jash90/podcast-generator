@@ -347,8 +347,8 @@ async function generateGuestPersona(topic: string, language: string, guestType: 
     // For regular models that support system role
     baseParams = {
       model,
-      messages: [
-        {
+    messages: [
+      {
           role: "system" as const,
           content: systemInstructions
         },
@@ -426,8 +426,8 @@ async function generateDiscussionTopics(
     // For regular models that support system role
     baseParams = {
       model,
-      messages: [
-        {
+    messages: [
+      {
           role: "system" as const,
           content: systemInstructions
         },

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Download, Volume2, RotateCcw, Loader2, CheckCircle } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Download, Volume2, RotateCcw, Loader2 } from 'lucide-react';
 import type { PodcastScript } from '../types';
-import { generateAudioForSegment, downloadFullPodcast, initializeVoiceAssignments, clearAudioCache } from '../utils/audioGenerator';
+import { generateAudioForSegment, initializeVoiceAssignments, clearAudioCache, combineAudioBuffers } from '../utils/audioGenerator';
 
 interface AudioPlayerProps {
   script: PodcastScript | null;
@@ -587,7 +587,7 @@ async function downloadFullPodcastWithProgress(
     console.log(`Generated ${audioBuffers.length} audio segments`);
     onProgress(90); // 90% for combining
 
-    // Combine audio buffers using the same logic as audioGenerator
+    // Combine audio buffers using the imported function from audioGenerator
     const combinedBuffer = combineAudioBuffers(audioBuffers);
     console.log(`Combined buffer size: ${combinedBuffer.byteLength} bytes`);
 
@@ -629,28 +629,6 @@ async function downloadFullPodcastWithProgress(
     console.error('Download error details:', error);
     throw error;
   }
-}
-
-// Helper function to combine audio buffers (same as in audioGenerator)
-function combineAudioBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
-  if (buffers.length === 0) {
-    return new ArrayBuffer(0);
-  }
-  
-  if (buffers.length === 1) {
-    return buffers[0];
-  }
-
-  const totalLength = buffers.reduce((acc, buffer) => acc + buffer.byteLength, 0);
-  const combinedBuffer = new Uint8Array(totalLength);
-  
-  let offset = 0;
-  for (const buffer of buffers) {
-    combinedBuffer.set(new Uint8Array(buffer), offset);
-    offset += buffer.byteLength;
-  }
-
-  return combinedBuffer.buffer;
 }
 
 export default AudioPlayer;

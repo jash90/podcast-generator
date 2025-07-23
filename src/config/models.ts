@@ -22,16 +22,17 @@ export interface ModelConfig {
 
 // Allowed chat models for Persona Generation, Script Generation, and Language Detection
 const ALLOWED_CHAT_MODELS = [
+  'gpt-3.5-turbo',   // GPT 3.5
   'gpt-4',           // GPT 4
+  'gpt-4.1-nano',    // GPT 4.1 nano
+  'gpt-4.1-mini',    // GPT 4.1 mini
   'gpt-4o-mini',     // GPT 4.1 mini (mapped to GPT-4o Mini)
   'gpt-4.1',         // GPT 4.1
   'gpt-4o',          // GPT 4o
   'o1',              // o1
-  'o1-preview',      // o1 (alternative naming)
   'o1-mini',         // o1 mini
-  'o3',              // o3
-  'o3-preview',      // o3 (alternative naming)
-  'o3-mini'          // o3 mini
+  'o3-mini',         // o3 mini
+  'o3'               // o3
 ];
 
 // Check if a chat model is in the allowed list
@@ -93,6 +94,8 @@ function formatModelName(id: string): string {
     'o1-mini': 'o1 Mini',
     'gpt-4': 'GPT-4',
     'gpt-4.1': 'GPT-4.1',
+    'gpt-4.1-mini': 'GPT-4.1 Mini',
+    'gpt-4.1-nano': 'GPT-4.1 Nano',
     'gpt-4-turbo': 'GPT-4 Turbo',
     'gpt-4o': 'GPT-4o',
     'gpt-4o-mini': 'GPT-4o Mini',
@@ -118,6 +121,13 @@ function generateModelDescription(id: string): string {
   
   if (id === 'gpt-4.1') {
     return 'Enhanced GPT-4 with improved capabilities and performance';
+  }
+  if (id === 'gpt-4.1-mini') {
+    return 'Faster and more affordable GPT-4.1 optimized for speed';
+  }
+  
+  if (id === 'gpt-4.1-nano') {
+    return 'Ultra-efficient nano version of GPT-4.1 optimized for speed';
   }
   
   if (id.startsWith('gpt-4')) {
@@ -148,6 +158,8 @@ function getModelMaxTokens(id: string): number {
   }
   
   if (id.startsWith('gpt-4')) {
+    if (id === 'gpt-4.1-mini') return 64000; // Mini version has smaller context
+    if (id === 'gpt-4.1-nano') return 64000; // Nano version has smaller context
     if (id.includes('turbo') || id.includes('o') || id === 'gpt-4.1') return 128000;
     return 8192;
   }
@@ -236,6 +248,22 @@ const FALLBACK_CHAT_MODELS: ModelConfig[] = [
     maxTokens: 128000
   },
   {
+    id: 'gpt-4.1-mini',
+    name: 'GPT-4.1 Mini',
+    provider: 'openai',
+    category: 'chat',
+    description: 'Faster and more affordable GPT-4.1 optimized for speed',
+    maxTokens: 64000
+  },
+  {
+    id: 'gpt-4.1-nano',
+    name: 'GPT-4.1 Nano',
+    provider: 'openai',
+    category: 'chat',
+    description: 'Ultra-efficient nano version of GPT-4.1 optimized for speed',
+    maxTokens: 64000
+  },
+  {
     id: 'gpt-4',
     name: 'GPT-4',
     provider: 'openai',
@@ -258,6 +286,14 @@ const FALLBACK_CHAT_MODELS: ModelConfig[] = [
     category: 'chat',
     description: 'Faster and more affordable version of GPT-4o',
     maxTokens: 128000
+  },
+  {
+    id: 'gpt-3.5-turbo',
+    name: 'GPT-3.5 Turbo',
+    provider: 'openai',
+    category: 'chat',
+    description: 'Fast and cost-effective for most tasks',
+    maxTokens: 16385
   }
 ];
 

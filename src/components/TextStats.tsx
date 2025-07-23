@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, FileText, Clock, AlertTriangle, CheckCircle, Bug, Download } from 'lucide-react';
 import { splitTextForTTS, validateTextChunk, estimateSpeakingDuration } from '../utils/textSplitter';
-import { debugDownload, testDownloadSupport, getCacheStats } from '../utils/audioGenerator';
+import { debugDownload, testDownloadSupport, getCacheStats, diagnoseDownloadIssue } from '../utils/audioGenerator';
 import type { PodcastScript } from '../types';
 
 interface TextStatsProps {
@@ -50,6 +50,15 @@ function TextStats({ script }: TextStatsProps) {
       cookieEnabled: navigator.cookieEnabled,
       onLine: navigator.onLine
     });
+    
+    // Use the new diagnostic function
+    const diagnosis = diagnoseDownloadIssue(script);
+    console.log('Download diagnosis:', diagnosis);
+    
+    if (!diagnosis.canDownload) {
+      console.warn('Download issues detected:', diagnosis.issues);
+      console.log('Recommendations:', diagnosis.recommendations);
+    }
   };
 
   return (
