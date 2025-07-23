@@ -140,7 +140,7 @@ function AudioPlayer({ script, isPlaying, setIsPlaying, apiKey, ttsModel }: Audi
             : seg
         ));
 
-        const result: AudioSegmentResult = await downloadManager.preloadSegment(segment, i);
+        const result: AudioSegmentResult = await downloadManager.preloadSegment(segment);
 
         if (result.success && result.buffer) {
           try {
