@@ -1,11 +1,12 @@
 // AI Model Configuration
-// To add new models: Add them to the appropriate array below with proper ModelConfig interface
-// The system will automatically make them available in the UI selector
+// Models are now fetched dynamically from OpenAI API with fallback to hardcoded models
 //
 // Model Flags:
 // - usesCompletionTokens: Use 'max_completion_tokens' instead of 'max_tokens' (for o1/o3 models)
 // - noSystemRole: Model doesn't support 'system' role messages (for o1/o3 models)
 // - noTemperature: Model doesn't support temperature customization, uses default 1 (for o1/o3 models)
+
+import { createOpenAIClient } from './api';
 
 export interface ModelConfig {
   id: string;
@@ -19,7 +20,122 @@ export interface ModelConfig {
   noTemperature?: boolean; // For o1/o3 models that don't support temperature customization
 }
 
-export const CHAT_MODELS: ModelConfig[] = [
+// Model configuration rules based on model ID patterns
+const MODEL_RULES = {
+  // o1/o3 reasoning models have special limitations
+  isReasoningModel: (id: string) => id.startsWith('o1') || id.startsWith('o3'),
+  // TTS models
+  isTTSModel: (id: string) => id.startsWith('tts-'),
+  // Chat models
+  isChatModel: (id: string) => !id.startsWith('tts-') && !id.startsWith('whisper-') && !id.startsWith('dall-e') && !id.startsWith('text-embedding'),
+};
+
+// Apply model configuration rules
+function applyModelRules(model: { id: string; [key: string]: unknown }): ModelConfig | null {
+  const id = model.id;
+  
+  if (MODEL_RULES.isChatModel(id)) {
+    const isReasoning = MODEL_RULES.isReasoningModel(id);
+    
+    return {
+      id,
+      name: formatModelName(id),
+      provider: 'openai',
+      category: 'chat',
+      description: generateModelDescription(id),
+      maxTokens: getModelMaxTokens(id),
+      usesCompletionTokens: isReasoning,
+      noSystemRole: isReasoning,
+      noTemperature: isReasoning,
+    };
+  }
+  
+  if (MODEL_RULES.isTTSModel(id)) {
+    return {
+      id,
+      name: formatModelName(id),
+      provider: 'openai',
+      category: 'tts',
+      description: id.includes('-hd') ? 'Higher quality text-to-speech model' : 'Standard text-to-speech model',
+    };
+  }
+  
+  return null;
+}
+
+function formatModelName(id: string): string {
+  // Convert model IDs to friendly names
+  const nameMap: Record<string, string> = {
+    'o3': 'o3',
+    'o3-mini': 'o3 Mini',
+    'o1': 'o1',
+    'o1-preview': 'o1 Preview',
+    'o1-mini': 'o1 Mini',
+    'gpt-4': 'GPT-4',
+    'gpt-4-turbo': 'GPT-4 Turbo',
+    'gpt-4o': 'GPT-4o',
+    'gpt-4o-mini': 'GPT-4o Mini',
+    'gpt-3.5-turbo': 'GPT-3.5 Turbo',
+    'tts-1': 'TTS-1',
+    'tts-1-hd': 'TTS-1 HD',
+  };
+  
+  return nameMap[id] || id.split('-').map(part => 
+    part.charAt(0).toUpperCase() + part.slice(1)
+  ).join(' ');
+}
+
+function generateModelDescription(id: string): string {
+  if (id.startsWith('o3')) {
+    return id.includes('mini') 
+      ? 'Latest reasoning model, optimized for efficiency'
+      : 'Latest reasoning model with exceptional problem-solving capabilities';
+  }
+  
+  if (id.startsWith('o1')) {
+    if (id.includes('preview')) return 'Preview version of o1 reasoning model';
+    if (id.includes('mini')) return 'Faster and more affordable o1 reasoning model';
+    return 'Advanced reasoning model for complex problems';
+  }
+  
+  if (id.startsWith('gpt-4')) {
+    if (id.includes('turbo')) return 'Latest GPT-4 with improved performance and larger context';
+    if (id.includes('o')) {
+      return id.includes('mini') 
+        ? 'Faster and more affordable version of GPT-4o'
+        : 'GPT-4 optimized for speed and efficiency';
+    }
+    if (id === 'gpt-4.1') return 'Enhanced GPT-4 with improved capabilities and performance';
+    return 'Most capable model, best for complex reasoning';
+  }
+  
+  if (id.startsWith('gpt-3.5')) {
+    return 'Fast and cost-effective for most tasks';
+  }
+  
+  return 'OpenAI language model';
+}
+
+function getModelMaxTokens(id: string): number {
+  // Token limits based on model type
+  if (id.startsWith('o3') || id.startsWith('o1')) {
+    return id.includes('preview') ? 128000 : 200000;
+  }
+  
+  if (id.startsWith('gpt-4')) {
+    if (id.includes('turbo') || id.includes('o') || id === 'gpt-4.1') return 128000;
+    return 8192;
+  }
+  
+  if (id.startsWith('gpt-3.5')) {
+    return 16385;
+  }
+  
+  return 4096; // Default fallback
+}
+
+// Fallback models in case API fetch fails
+const FALLBACK_CHAT_MODELS: ModelConfig[] = [
   {
     id: 'o3',
     name: 'o3',
@@ -125,7 +241,7 @@ export const CHAT_MODELS: ModelConfig[] = [
   }
 ];
 
-export const TTS_MODELS: ModelConfig[] = [
+const FALLBACK_TTS_MODELS: ModelConfig[] = [
   {
     id: 'tts-1',
     name: 'TTS-1',
@@ -141,6 +257,73 @@ export const TTS_MODELS: ModelConfig[] = [
     description: 'Higher quality text-to-speech model'
   }
 ];
+
+// Cache for fetched models
+let cachedModels: { chat: ModelConfig[], tts: ModelConfig[] } | null = null;
+let lastFetchTime = 0;
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+export async function fetchModelsFromAPI(apiKey: string): Promise<{ chat: ModelConfig[], tts: ModelConfig[] }> {
+  // Return cached models if still valid
+  const now = Date.now();
+  if (cachedModels && (now - lastFetchTime) < CACHE_DURATION) {
+    return cachedModels;
+  }
+
+  try {
+    const openai = createOpenAIClient(apiKey);
+    const response = await openai.models.list();
+
+    console.log(response.data);
+    
+    const chatModels: ModelConfig[] = [];
+    const ttsModels: ModelConfig[] = [];
+    
+    for (const model of response.data) {
+      const configuredModel = applyModelRules(model);
+      if (configuredModel) {
+        if (configuredModel.category === 'chat') {
+          chatModels.push(configuredModel);
+        } else if (configuredModel.category === 'tts') {
+          ttsModels.push(configuredModel);
+        }
+      }
+    }
+    
+    // Sort models by preference (o3 > o1 > gpt-4 > gpt-3.5)
+    chatModels.sort((a, b) => {
+      const priority = (id: string) => {
+        if (id.startsWith('o3')) return 1000;
+        if (id.startsWith('o1')) return 900;
+        if (id.startsWith('gpt-4')) return 800;
+        if (id.startsWith('gpt-3.5')) return 700;
+        return 500;
+      };
+      return priority(b.id) - priority(a.id);
+    });
+    
+    cachedModels = { chat: chatModels, tts: ttsModels };
+    lastFetchTime = now;
+    
+    return cachedModels;
+  } catch (error) {
+    console.warn('Failed to fetch models from OpenAI API, using fallback models:', error);
+    return {
+      chat: FALLBACK_CHAT_MODELS,
+      tts: FALLBACK_TTS_MODELS
+    };
+  }
+}
+
+// Legacy exports for backward compatibility - now return fetched models or fallbacks
+export let CHAT_MODELS: ModelConfig[] = FALLBACK_CHAT_MODELS;
+export let TTS_MODELS: ModelConfig[] = FALLBACK_TTS_MODELS;
+
+// Update models from API
+export function updateModels(fetchedModels: { chat: ModelConfig[], tts: ModelConfig[] }) {
+  CHAT_MODELS = fetchedModels.chat;
+  TTS_MODELS = fetchedModels.tts;
+}
 
 export interface ProjectModels {
   personaGeneration: string;

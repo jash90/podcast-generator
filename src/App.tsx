@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Mic } from 'lucide-react';
 import ApiKeyInput from './components/ApiKeyInput';
 import TopicInput from './components/TopicInput';
@@ -8,7 +8,7 @@ import GenerationProgress, { GenerationStage } from './components/GenerationProg
 import ModelSelector from './components/ModelSelector';
 import { generatePodcastScript } from './utils/scriptGenerator';
 import type { PodcastScript } from './types';
-import { DEFAULT_MODELS } from './config/models';
+import { DEFAULT_MODELS, fetchModelsFromAPI, updateModels } from './config/models';
 import type { ProjectModels } from './config/models';
 
 function App() {
@@ -21,6 +21,51 @@ function App() {
   const [generationStage, setGenerationStage] = useState<GenerationStage>(null);
   const [models, setModels] = useState<ProjectModels>(DEFAULT_MODELS);
   const [isModelSelectorExpanded, setIsModelSelectorExpanded] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  // Fetch models when API key changes
+  useEffect(() => {
+    const fetchModels = async () => {
+      if (!apiKey.trim()) return;
+      
+      try {
+        setIsLoadingModels(true);
+        setModelsError(null);
+        const fetchedModels = await fetchModelsFromAPI(apiKey);
+        updateModels(fetchedModels);
+        
+        // Update current models to use only available models
+        const availableChatModels = fetchedModels.chat.map(m => m.id);
+        const availableTTSModels = fetchedModels.tts.map(m => m.id);
+        
+        setModels(currentModels => ({
+          personaGeneration: availableChatModels.includes(currentModels.personaGeneration) 
+            ? currentModels.personaGeneration 
+            : availableChatModels[0] || 'gpt-3.5-turbo',
+          scriptGeneration: availableChatModels.includes(currentModels.scriptGeneration)
+            ? currentModels.scriptGeneration
+            : availableChatModels[0] || 'gpt-3.5-turbo',
+          languageDetection: availableChatModels.includes(currentModels.languageDetection)
+            ? currentModels.languageDetection
+            : availableChatModels[0] || 'gpt-3.5-turbo',
+          textToSpeech: availableTTSModels.includes(currentModels.textToSpeech)
+            ? currentModels.textToSpeech
+            : availableTTSModels[0] || 'tts-1'
+        }));
+        
+      } catch (err: unknown) {
+        setModelsError('Failed to fetch models from OpenAI API. Using fallback models.');
+        console.warn('Models fetch error:', err);
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    // Debounce API calls
+    const timeoutId = setTimeout(fetchModels, 500);
+    return () => clearTimeout(timeoutId);
+  }, [apiKey]);
 
   const handleGenerate = async () => {
     if (!apiKey.trim() || !topic.trim()) {
@@ -37,8 +82,9 @@ function App() {
       const generatedScript = await generatePodcastScript(topic, apiKey, setGenerationStage, models);
       setScript(generatedScript);
       setGenerationStage('complete');
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate podcast script. Please try again.');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate podcast script. Please try again.';
+      setError(errorMessage);
       setGenerationStage(null);
     } finally {
       setIsLoading(false);
@@ -79,6 +125,8 @@ function App() {
             onChange={setModels}
             isExpanded={isModelSelectorExpanded}
             onToggle={() => setIsModelSelectorExpanded(!isModelSelectorExpanded)}
+            isLoadingModels={isLoadingModels}
+            modelsError={modelsError}
           />
 
           {(isLoading || generationStage === 'complete') && (
