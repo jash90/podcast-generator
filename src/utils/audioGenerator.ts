@@ -5,10 +5,11 @@ import { splitTextForTTS, optimizeTextForTTS, validateTextChunk } from './textSp
 
 // TTS Rate Limiting Configuration
 const TTS_RATE_LIMITING = {
-  ERROR_RETRY_DELAY: 5000,      // 5 seconds delay only on errors
-  RATE_LIMIT_DELAY: 10000,      // 10 seconds for rate limit errors
-  PRELOAD_DELAY: 500,           // 0.5 seconds minimal delay for preload
-  MAX_RETRIES: 3,               // Maximum retry attempts
+  ERROR_RETRY_DELAY: 3000,      // 3 seconds delay for general errors
+  RATE_LIMIT_DELAY: 8000,       // 8 seconds for rate limit errors
+  PRELOAD_DELAY: 1500,          // 1.5 seconds between preload requests
+  MAX_RETRIES: 2,               // Reduced retries to prevent long waits
+  CHUNK_PROCESSING_DELAY: 1000, // 1 second between chunks
 } as const;
 
 // Enhanced voice configuration with characteristics
@@ -180,12 +181,22 @@ export class AudioDownloadManager {
 
   async generateSegmentAudio(segment: PodcastSegment, segmentIndex: number): Promise<AudioSegmentResult> {
     try {
+      // Input validation
+      if (!segment || !segment.text || segment.text.trim().length === 0) {
+        throw new Error(`Invalid segment: ${segment?.type || 'unknown'} has no text content`);
+      }
+
       this.reportProgress(segmentIndex, 0, `Generating audio for ${segment.type}`, segment);
 
       const result = await this.retryWithBackoff(
         () => generateAudioForSegment(segment, this.apiKey, this.model),
         `Segment ${segmentIndex + 1} (${segment.type})`
       );
+
+      // Validate result buffer
+      if (!result.result || result.result.byteLength === 0) {
+        throw new Error(`Generated buffer is empty for segment ${segmentIndex + 1}`);
+      }
 
       this.reportProgress(segmentIndex, 100, `Completed ${segment.type}`);
       
@@ -196,7 +207,7 @@ export class AudioDownloadManager {
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Failed to generate segment ${segmentIndex + 1}:`, errorMessage);
+      console.error(`❌ Failed to generate segment ${segmentIndex + 1} (${segment?.type}):`, errorMessage);
       
       return {
         success: false,
@@ -238,14 +249,24 @@ export class AudioDownloadManager {
       totalRetries += result.retries;
 
       if (result.success && result.buffer) {
-        audioBuffers.push(result.buffer);
-        console.log(`✅ Segment ${i + 1} completed successfully`);
+        // Additional validation before adding to buffers
+        if (validateAudioBuffer(result.buffer, `Segment ${i + 1} final check`)) {
+          audioBuffers.push(result.buffer);
+          console.log(`✅ Segment ${i + 1} completed successfully`);
+        } else {
+          failedSegments.push(i);
+          console.error(`❌ Segment ${i + 1} failed validation despite successful generation`);
+          
+          // Create silent buffer for failed segments to maintain sync
+          const silentBuffer = new ArrayBuffer(2048); // Slightly larger silent buffer
+          audioBuffers.push(silentBuffer);
+        }
       } else {
         failedSegments.push(i);
         console.error(`❌ Segment ${i + 1} failed permanently: ${result.error}`);
         
         // Create silent buffer for failed segments to maintain sync
-        const silentBuffer = new ArrayBuffer(1024); // Small silent buffer
+        const silentBuffer = new ArrayBuffer(2048); // Slightly larger silent buffer
         audioBuffers.push(silentBuffer);
       }
     }
@@ -282,22 +303,8 @@ export class AudioDownloadManager {
     
     this.reportProgress(this.script.segments.length, 75, 'Starting download...');
     
-    // Create download
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.style.display = 'none';
-    
-    document.body.appendChild(a);
-    a.click();
-    
-    // Cleanup
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log('🧹 Download cleanup completed');
-    }, 100);
+    // Use enhanced download function
+    createDownloadLink(blob, filename);
 
     this.reportProgress(this.script.segments.length, 100, 'Download complete!');
 
@@ -498,45 +505,102 @@ function hashString(str: string): string {
   return Math.abs(hash).toString(36);
 }
 
-/**
- * Generate audio for a single text chunk with enhanced error handling
- */
+// Enhanced buffer validation
+function validateAudioBuffer(buffer: ArrayBuffer, context: string): boolean {
+  try {
+    if (!buffer || buffer.byteLength === 0) {
+      console.error(`❌ ${context}: Empty or null buffer`);
+      return false;
+    }
+    
+    if (isArrayBufferDetached(buffer)) {
+      console.error(`❌ ${context}: Detached ArrayBuffer detected`);
+      return false;
+    }
+    
+    // Check if buffer contains valid audio data (basic MP3 header check)
+    const view = new Uint8Array(buffer);
+    const hasMP3Header = view.length >= 3 && 
+                        view[0] === 0xFF && 
+                        (view[1] & 0xE0) === 0xE0;
+    
+    if (!hasMP3Header) {
+      console.warn(`⚠️ ${context}: Buffer may not contain valid MP3 data`);
+    }
+    
+    console.log(`✅ ${context}: Buffer validated (${buffer.byteLength} bytes, MP3: ${hasMP3Header})`);
+    return true;
+  } catch (error) {
+    console.error(`❌ ${context}: Buffer validation failed:`, error);
+    return false;
+  }
+}
+
+// Enhanced audio chunk generation with better error recovery
 async function generateAudioChunk(
   text: string,
   voice: VoiceType,
   model: string,
-  apiKey: string
+  apiKey: string,
+  attemptNumber: number = 1
 ): Promise<ArrayBuffer> {
   const openai = createOpenAIClient(apiKey);
+  const context = `Chunk generation (attempt ${attemptNumber})`;
   
   try {
+    // Additional text validation
+    if (!text || text.trim().length === 0) {
+      throw new Error('Text is empty or contains only whitespace');
+    }
+    
+    if (text.length > 4096) {
+      throw new Error(`Text too long: ${text.length} characters (max: 4096)`);
+    }
+    
+    console.log(`🎵 ${context}: Generating audio for ${text.length} chars with voice "${voice}"`);
+    
     const response = await openai.audio.speech.create({
       model,
       voice,
-      input: text,
+      input: text.trim(),
+      response_format: 'mp3',
+      speed: 1.0
     });
 
     const arrayBuffer = await response.arrayBuffer();
     
-    // Verify the buffer is valid
-    if (isArrayBufferDetached(arrayBuffer)) {
-      throw new Error('Generated ArrayBuffer is detached');
+    // Enhanced buffer validation
+    if (!validateAudioBuffer(arrayBuffer, context)) {
+      throw new Error(`Invalid audio buffer generated for text: "${text.substring(0, 50)}..."`);
     }
     
-    if (arrayBuffer.byteLength === 0) {
-      throw new Error('Generated audio buffer is empty');
-    }
-
-    console.log(`Generated audio chunk: ${arrayBuffer.byteLength} bytes for ${text.length} characters`);
+    console.log(`✅ ${context}: Generated ${arrayBuffer.byteLength} bytes for "${text.substring(0, 30)}..."`);
     return arrayBuffer;
     
   } catch (error) {
-    console.error('Audio chunk generation failed:', {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`❌ ${context} failed:`, {
       textLength: text.length,
+      textPreview: text.substring(0, 50),
       voice,
       model,
-      error: error instanceof Error ? error.message : String(error)
+      attempt: attemptNumber,
+      error: errorMessage
     });
+    
+    // Enhanced error context
+    if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+      throw new Error(`Rate limit exceeded (attempt ${attemptNumber}): ${errorMessage}`);
+    }
+    
+    if (errorMessage.includes('quota') || errorMessage.includes('insufficient')) {
+      throw new Error(`API quota exceeded: ${errorMessage}`);
+    }
+    
+    if (errorMessage.includes('invalid') && errorMessage.includes('key')) {
+      throw new Error(`Invalid API key: ${errorMessage}`);
+    }
+    
     throw error;
   }
 }
@@ -576,85 +640,132 @@ export async function generateAudioForSegment(
   model: string = 'tts-1'
 ): Promise<ArrayBuffer> {
   const cacheKey = getCacheKey(segment, model);
+  const context = `Segment: ${segment.type}`;
   
-  // Check cache first and create fresh ArrayBuffer from cached data
+  // Enhanced cache validation
   if (audioCache.has(cacheKey)) {
     const cachedData = audioCache.get(cacheKey)!;
-    // Create a fresh ArrayBuffer from the cached Uint8Array
-    const freshBuffer = new ArrayBuffer(cachedData.length);
-    new Uint8Array(freshBuffer).set(cachedData);
-    console.log(`📋 Using cached audio for segment: ${segment.type} (${cachedData.length} bytes)`);
-    return freshBuffer;
+    try {
+      // Create and validate fresh ArrayBuffer from cached data
+      const freshBuffer = new ArrayBuffer(cachedData.length);
+      new Uint8Array(freshBuffer).set(cachedData);
+      
+      if (validateAudioBuffer(freshBuffer, `${context} (cached)`)) {
+        console.log(`📋 Using cached audio for ${segment.type} (${cachedData.length} bytes)`);
+        return freshBuffer;
+      } else {
+        // Remove invalid cache entry
+        audioCache.delete(cacheKey);
+        console.warn(`🗑️ Removed invalid cache entry for ${segment.type}`);
+      }
+    } catch (error) {
+      console.error(`❌ Cache retrieval failed for ${segment.type}:`, error);
+      audioCache.delete(cacheKey);
+    }
   }
 
   const voice: VoiceType = voiceAssignments.get(segment.type) || 'onyx';
   
-  // Optimize and validate the text
+  // Enhanced text preparation
   const optimizedText = optimizeTextForTTS(segment.text);
   const validation = validateTextChunk(optimizedText);
   
   if (validation.warnings.length > 0) {
-    console.warn(`Text validation warnings for segment:`, validation.warnings);
+    console.warn(`⚠️ Text validation warnings for ${segment.type}:`, validation.warnings);
   }
 
   // Split text into chunks if needed
   const textChunks = splitTextForTTS(optimizedText);
-  
-  console.log(`Generating audio for ${segment.type} with ${textChunks.length} chunk(s)`);
+  console.log(`🎙️ Processing ${segment.type}: ${textChunks.length} chunk(s), ${optimizedText.length} chars`);
   
   try {
     if (textChunks.length === 1) {
-      // Single chunk - direct generation
-      const audioBuffer = await generateAudioChunk(textChunks[0], voice, model, apiKey);
-      // Cache as Uint8Array to prevent detachment issues
-      audioCache.set(cacheKey, new Uint8Array(audioBuffer));
-      return audioBuffer;
+      // Single chunk - direct generation with retry logic
+      let lastError: Error | null = null;
+      
+      for (let attempt = 1; attempt <= TTS_RATE_LIMITING.MAX_RETRIES + 1; attempt++) {
+        try {
+          const audioBuffer = await generateAudioChunk(textChunks[0], voice, model, apiKey, attempt);
+          
+          // Cache as Uint8Array to prevent detachment issues
+          audioCache.set(cacheKey, new Uint8Array(audioBuffer));
+          return audioBuffer;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          
+          if (attempt <= TTS_RATE_LIMITING.MAX_RETRIES) {
+            const isRateLimit = lastError.message.includes('rate limit') || lastError.message.includes('429');
+            const delayMs = isRateLimit ? TTS_RATE_LIMITING.RATE_LIMIT_DELAY : TTS_RATE_LIMITING.ERROR_RETRY_DELAY;
+            
+            console.log(`⏳ ${context}: Waiting ${delayMs / 1000}s before retry ${attempt + 1}...`);
+            await delay(delayMs);
+          }
+        }
+      }
+      
+      throw lastError || new Error('All retry attempts failed');
+      
     } else {
-      // Multiple chunks - generate sequentially with error-based delays
-      console.log(`Splitting long text (${optimizedText.length} chars) into ${textChunks.length} chunks`);
+      // Multiple chunks - sequential processing with enhanced error recovery
+      console.log(`📦 ${context}: Splitting into ${textChunks.length} chunks for sequential processing`);
       
       const audioChunks: ArrayBuffer[] = [];
       
       for (let i = 0; i < textChunks.length; i++) {
         const chunk = textChunks[i];
-        console.log(`Chunk ${i + 1}/${textChunks.length}: ${chunk.length} characters`);
+        console.log(`📝 Chunk ${i + 1}/${textChunks.length}: ${chunk.length} characters`);
         
-        let retries = 0;
-        while (retries <= TTS_RATE_LIMITING.MAX_RETRIES) {
+        let chunkBuffer: ArrayBuffer | null = null;
+        let lastError: Error | null = null;
+        
+        // Retry logic for each chunk
+        for (let attempt = 1; attempt <= TTS_RATE_LIMITING.MAX_RETRIES + 1; attempt++) {
           try {
-            const audioBuffer = await generateAudioChunk(chunk, voice, model, apiKey);
-            audioChunks.push(audioBuffer);
+            chunkBuffer = await generateAudioChunk(chunk, voice, model, apiKey, attempt);
             console.log(`✅ Chunk ${i + 1} completed successfully`);
-            break; // Success - proceed to next chunk immediately
-          } catch (error: unknown) {
-            retries++;
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`❌ Chunk ${i + 1} failed (attempt ${retries}/${TTS_RATE_LIMITING.MAX_RETRIES + 1}):`, errorMessage);
+            break;
+          } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error));
             
-            if (retries > TTS_RATE_LIMITING.MAX_RETRIES) {
-              throw error; // Max retries exceeded
+            if (attempt <= TTS_RATE_LIMITING.MAX_RETRIES) {
+              const isRateLimit = lastError.message.includes('rate limit') || lastError.message.includes('429');
+              const delayMs = isRateLimit ? TTS_RATE_LIMITING.RATE_LIMIT_DELAY : TTS_RATE_LIMITING.ERROR_RETRY_DELAY;
+              
+              console.log(`⏳ Chunk ${i + 1} retry ${attempt}: Waiting ${delayMs / 1000}s...`);
+              await delay(delayMs);
             }
-            
-            // Determine delay based on error type
-            const hasStatusCode = error && typeof error === 'object' && 'status' in error;
-            const isRateLimit = errorMessage.includes('rate limit') || (hasStatusCode && (error as { status: number }).status === 429);
-            const delayMs = isRateLimit ? TTS_RATE_LIMITING.RATE_LIMIT_DELAY : TTS_RATE_LIMITING.ERROR_RETRY_DELAY;
-            
-            console.log(`⏳ Waiting ${delayMs / 1000} seconds before retry...`);
-            await delay(delayMs);
           }
+        }
+        
+        if (!chunkBuffer) {
+          console.error(`❌ Chunk ${i + 1} failed permanently:`, lastError);
+          // Create a small silent buffer to maintain audio continuity
+          chunkBuffer = new ArrayBuffer(1024);
+        }
+        
+        audioChunks.push(chunkBuffer);
+        
+        // Inter-chunk delay to prevent rate limiting
+        if (i < textChunks.length - 1) {
+          console.log(`⏸️ Inter-chunk delay: ${TTS_RATE_LIMITING.CHUNK_PROCESSING_DELAY / 1000}s`);
+          await delay(TTS_RATE_LIMITING.CHUNK_PROCESSING_DELAY);
         }
       }
 
       const combinedBuffer = combineAudioBuffers(audioChunks);
       
-      // Cache as Uint8Array to prevent detachment issues
-      audioCache.set(cacheKey, new Uint8Array(combinedBuffer));
-      return combinedBuffer;
+      // Validate combined buffer
+      if (validateAudioBuffer(combinedBuffer, `${context} (combined)`)) {
+        // Cache as Uint8Array to prevent detachment issues
+        audioCache.set(cacheKey, new Uint8Array(combinedBuffer));
+        return combinedBuffer;
+      } else {
+        throw new Error('Combined audio buffer validation failed');
+      }
     }
   } catch (error) {
-    console.error('Audio generation error:', error);
-    throw new Error(`Failed to generate audio for ${segment.type}: ${error}`);
+    console.error(`❌ ${context}: Audio generation failed:`, error);
+    throw new Error(`Failed to generate audio for ${segment.type}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -838,4 +949,60 @@ export function diagnoseDownloadIssue(script: PodcastScript): {
     issues,
     recommendations
   };
+}
+
+// Enhanced download function with better browser compatibility
+export function createDownloadLink(blob: Blob, filename: string): void {
+  try {
+    // Enhanced browser compatibility check
+    const testLink = document.createElement('a');
+    const hasDownloadSupport = 'download' in testLink;
+    
+    if (!hasDownloadSupport) {
+      // Fallback for older browsers
+      console.warn('⚠️ Browser does not support download attribute, using fallback method');
+      const reader = new FileReader();
+      reader.onload = function() {
+        const dataUrl = reader.result as string;
+        window.open(dataUrl, '_blank');
+      };
+      reader.readAsDataURL(blob);
+      return;
+    }
+    
+    // Standard download method
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    
+    // Enhanced error handling for download
+    a.addEventListener('error', (e) => {
+      console.error('❌ Download error:', e);
+      URL.revokeObjectURL(url);
+    });
+    
+    document.body.appendChild(a);
+    a.click();
+    
+    // Enhanced cleanup with error handling
+    setTimeout(() => {
+      try {
+        if (document.body.contains(a)) {
+          document.body.removeChild(a);
+        }
+        URL.revokeObjectURL(url);
+        console.log('🧹 Download cleanup completed successfully');
+      } catch (error) {
+        console.error('⚠️ Download cleanup error:', error);
+      }
+    }, 1000); // Longer delay for better compatibility
+    
+    console.log(`📁 Download initiated: ${filename} (${Math.round(blob.size / 1024)} KB)`);
+    
+  } catch (error) {
+    console.error('❌ Download creation failed:', error);
+    throw new Error(`Download failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
