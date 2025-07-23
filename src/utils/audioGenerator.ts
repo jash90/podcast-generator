@@ -7,10 +7,12 @@ const VOICES = {
   female: ['alloy', 'nova', 'shimmer']
 } as const;
 
-const voiceAssignments = new Map<string, string>();
+type VoiceType = typeof VOICES.male[number] | typeof VOICES.female[number];
+
+const voiceAssignments = new Map<string, VoiceType>();
 const audioCache = new Map<string, Uint8Array>();
 
-function assignVoiceForPersona(type: string, personas: Record<string, boolean>): string {
+function assignVoiceForPersona(type: string, personas: Record<string, boolean>): VoiceType {
   if (voiceAssignments.has(type)) {
     return voiceAssignments.get(type)!;
   }
@@ -41,7 +43,7 @@ export async function generateAudioForSegment(
   }
 
   const openai = createOpenAIClient(apiKey);
-  const voice = voiceAssignments.get(segment.type) || 'onyx';
+  const voice: VoiceType = voiceAssignments.get(segment.type) || 'onyx';
   
   const response = await openai.audio.speech.create({
     model: "tts-1",
@@ -59,20 +61,17 @@ export async function generateAudioForSegment(
 export async function initializeVoiceAssignments(script: PodcastScript): Promise<void> {
   voiceAssignments.clear();
   
-  const defaultPersonas: Record<string, boolean> = {
+  // Use the gender information from the script, with fallback to defaults
+  const personaGenders = script.personaGenders || {
     'host': true,
-    'guest1': true,
+    'guest1': true,        
     'guest2': false,
   };
 
   const uniqueTypes = new Set(script.segments.map(s => s.type));
   uniqueTypes.forEach(type => {
-    assignVoiceForPersona(type, defaultPersonas);
+    assignVoiceForPersona(type, personaGenders);
   });
-}
-
-export function clearAudioCache(): void {
-  audioCache.clear();
 }
 
 export async function downloadFullPodcast(script: PodcastScript, apiKey: string): Promise<void> {
@@ -105,4 +104,8 @@ export async function downloadFullPodcast(script: PodcastScript, apiKey: string)
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+export function clearAudioCache(): void {
+  audioCache.clear();
 }

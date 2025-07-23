@@ -9,23 +9,26 @@ Create three detailed personas for a podcast about "${topic}" in ${language}:
 
 1. Host:
 - Full name and background
+- Gender (male/female)
 - Expertise in journalism/broadcasting
 - Knowledge about the topic's history
 - Known for their balanced moderation style
 
 2. Guest 1 (Supporting perspective):
 - Full name and professional background
+- Gender (male/female)
 - Specific expertise related to the topic
 - Notable achievements
 - Main arguments and viewpoints
 
 3. Guest 2 (Alternative perspective):
 - Full name and professional background
+- Gender (male/female)
 - Specific expertise related to the topic
 - Notable achievements
 - Main arguments and viewpoints
 
-Format: Return the personas in a clear structure with "Host:", "Guest 1:", and "Guest 2:" sections.
+Format: Return the personas in a clear structure with "Host:", "Guest 1:", and "Guest 2:" sections. Make sure to clearly specify the gender for each persona.
 `;
 
 const SECTION_PROMPTS = {
@@ -126,6 +129,49 @@ async function generatePersonas(topic: string, language: string, apiKey: string)
   return completion.choices[0]?.message?.content || '';
 }
 
+function parsePersonaGenders(personas: string): Record<string, boolean> {
+  const genderMap: Record<string, boolean> = {
+    'host': true, // default to male
+    'guest1': true, // default to male  
+    'guest2': false, // default to female
+  };
+
+  // Parse the personas text to extract gender information
+  const sections = personas.split(/(?:Host:|Guest 1:|Guest 2:)/i);
+  
+  // Process Host section
+  if (sections[1]) {
+    const hostSection = sections[1].toLowerCase();
+    if (hostSection.includes('gender') && hostSection.includes('female')) {
+      genderMap['host'] = false; // female
+    } else if (hostSection.includes('gender') && hostSection.includes('male')) {
+      genderMap['host'] = true; // male
+    }
+  }
+  
+  // Process Guest 1 section
+  if (sections[2]) {
+    const guest1Section = sections[2].toLowerCase();
+    if (guest1Section.includes('gender') && guest1Section.includes('female')) {
+      genderMap['guest1'] = false; // female
+    } else if (guest1Section.includes('gender') && guest1Section.includes('male')) {
+      genderMap['guest1'] = true; // male
+    }
+  }
+  
+  // Process Guest 2 section
+  if (sections[3]) {
+    const guest2Section = sections[3].toLowerCase();
+    if (guest2Section.includes('gender') && guest2Section.includes('female')) {
+      genderMap['guest2'] = false; // female
+    } else if (guest2Section.includes('gender') && guest2Section.includes('male')) {
+      genderMap['guest2'] = true; // male
+    }
+  }
+
+  return genderMap;
+}
+
 async function generateSection(
   section: keyof typeof SECTION_PROMPTS,
   topic: string,
@@ -183,6 +229,7 @@ export async function generatePodcastScript(
     
     setGenerationStage('creating-personas');
     const personas = await generatePersonas(topic, language, apiKey);
+    const personaGenders = parsePersonaGenders(personas);
 
     setGenerationStage('writing-script');
     const sections = await Promise.all([
@@ -195,7 +242,7 @@ export async function generatePodcastScript(
     const segments = sections.flat();
 
     setGenerationStage('initializing-voices');
-    return { segments, language };
+    return { segments, language, personaGenders };
   } catch (error: any) {
     if (error.response?.status === 401) {
       throw new Error('Invalid API key. Please check your OpenAI API key and try again.');
