@@ -344,9 +344,9 @@ export interface ProjectModels {
 }
 
 export const DEFAULT_MODELS: ProjectModels = {
-  personaGeneration: 'o1-mini',
-  scriptGeneration: 'gpt-4o-mini',
-  languageDetection: 'gpt-3.5-turbo',
+  personaGeneration: 'gpt-4.1',
+  scriptGeneration: 'gpt-4.1',
+  languageDetection: 'gpt-4.1',
   textToSpeech: 'tts-1'
 };
 
