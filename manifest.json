@@ -1,0 +1,25 @@
+{
+  "name": "AI Podcast Generator",
+  "short_name": "PodcastAI",
+  "description": "Generate engaging AI-powered podcast scripts with multiple perspectives and professional audio synthesis",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1f1b29",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "categories": ["productivity", "entertainment", "education"],
+  "icons": [
+    {
+      "src": "/podcast-favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.svg",
+      "sizes": "180x180",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+} 
